@@ -79,6 +79,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: "03_requirements.txt"
 
       - name: Install dependencies
         run: pip install -r 03_requirements.txt
