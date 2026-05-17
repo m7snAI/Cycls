@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Scraper output / logs
+scrape*.log
+scrape*.err.log
+dry_run_*.html
+dry_run_*.json
+response*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
