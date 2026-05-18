@@ -32,6 +32,7 @@ import json
 import time
 import random
 import asyncio
+import calendar
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -417,6 +418,33 @@ def shard_generator(strategy: str) -> Iterator[tuple[str, dict]]:
     elif strategy == "single":
         # PublishDateId only — single shard, useful for testing the cap baseline
         yield "single", {}
+    elif strategy == "date_month":
+        # One shard per calendar month between DATE_SHARD_START and now (inclusive).
+        # Each month-bucket usually stays under the 5012-per-shard cap on its own;
+        # for peak months that exceed it, the run still gets the first ~5012 and we
+        # add bi-weekly sub-shards in a follow-up pass.
+        start_yyyymm = os.environ.get("DATE_SHARD_START", "202001")  # earliest data is 2020
+        try:
+            start_year, start_month = int(start_yyyymm[:4]), int(start_yyyymm[4:])
+        except ValueError:
+            raise ValueError(f"DATE_SHARD_START must be YYYYMM, got {start_yyyymm!r}")
+        end = datetime.now(timezone.utc)
+        y, m = start_year, start_month
+        while (y, m) <= (end.year, end.month):
+            last_day = calendar.monthrange(y, m)[1]
+            from_str = f"01/{m:02d}/{y}"
+            to_str = f"{last_day:02d}/{m:02d}/{y}"
+            yield (
+                f"m:{y}{m:02d}",
+                {
+                    "IsSearch": "true",
+                    "FromLastOfferPresentationDateString": from_str,
+                    "ToLastOfferPresentationDateString": to_str,
+                },
+            )
+            m += 1
+            if m == 13:
+                m, y = 1, y + 1
     else:
         raise ValueError(f"Unknown SHARD_STRATEGY: {strategy}")
 

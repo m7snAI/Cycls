@@ -22,11 +22,15 @@ on:
         options: [listing, details, both]
         default: listing
       shard_strategy:
-        description: "How to shard. type_subactivity_sort = the activity-tree strategy (177 shards, ~86% coverage of 283k)."
+        description: "How to shard. date_month = one shard per calendar month (best for full-history backfill). type_subactivity_sort = activity-tree strategy."
         required: true
         type: choice
-        options: [type_subactivity_sort, sort_flip, type, type_sort, single]
-        default: type_subactivity_sort
+        options: [date_month, type_subactivity_sort, sort_flip, type, type_sort, single]
+        default: date_month
+      date_shard_start:
+        description: "(date_month only) Earliest month to scrape, YYYYMM. Etimad has data from 2020-01."
+        required: false
+        default: "202001"
       shard_concurrency:
         description: "Number of shards processed in parallel."
         required: false
@@ -76,6 +80,7 @@ jobs:
           BRIGHTDATA_PROXY_URL: ${{ secrets.BRIGHTDATA_PROXY_URL }}
           MODE: ${{ inputs.mode }}
           SHARD_STRATEGY: ${{ inputs.shard_strategy }}
+          DATE_SHARD_START: ${{ inputs.date_shard_start }}
           SHARD_CONCURRENCY: ${{ inputs.shard_concurrency }}
           DETAIL_CONCURRENCY: ${{ inputs.detail_concurrency }}
           USE_PROXY: ${{ inputs.use_proxy }}
