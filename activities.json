@@ -1,0 +1,149 @@
+[
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "التجارة",
+    "value": "1"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "المقاولات",
+    "value": "2"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "التشغيل والصيانة والنظافة للمنشآت",
+    "value": "3"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "العقارات والأراضي",
+    "value": "4"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الصناعة والتعدين والتدوير",
+    "value": "5"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الغاز والمياه والطاقة",
+    "value": "6"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "المناجم والبترول والمحاجر",
+    "value": "7"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الإعلام والنشر والتوزيع",
+    "value": "8"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الاتصالات وتقنية المعلومات",
+    "value": "9"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الزراعة والصيد",
+    "value": "10"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الرعاية الصحية والنقاهة",
+    "value": "11"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "التعليم والتدريب",
+    "value": "12"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "التوظيف والاستقدام",
+    "value": "13"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الأمن والسلامة",
+    "value": "14"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "النقل والبريد والتخزين",
+    "value": "15"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "المهن الاستشارية",
+    "value": "16"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "السياحة والمطاعم والفنادق وتنظيم المعارض",
+    "value": "17"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "المالية والتمويل والتأمين",
+    "value": "18"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": "الخدمات الأخرى",
+    "value": "19"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": null,
+    "value": "931208"
+  },
+  {
+    "disabled": false,
+    "group": null,
+    "selected": false,
+    "text": null,
+    "value": "931902"
+  }
+]

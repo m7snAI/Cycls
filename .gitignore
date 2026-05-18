@@ -9,6 +9,14 @@ scrape*.err.log
 dry_run_*.html
 dry_run_*.json
 response*.txt
+parallel*.log
+parallel-checkpoint.json
+probe*.txt
+activities_in_db.txt
+ta_tenders.html
+
+# IDE / local agent state
+.claude/
 
 # Python
 __pycache__/

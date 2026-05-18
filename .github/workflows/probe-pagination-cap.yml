@@ -1,0 +1,64 @@
+# One-off feasibility probe before committing to a 283k full-history scrape.
+# Answers: does PublishDateId=0 also cap pagination at ~5k unique IDs?
+# Does sort=ASC submission unlock the older half? What totalCount does each
+# TenderTypeId have? Results land in probe-summary.json artifact.
+name: Probe Pagination Cap
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_pages:
+        description: "Hard cap on pages per pass (PageSize=24, so 2000 = up to 48k items per pass)."
+        required: false
+        default: "2000"
+      saturation_threshold:
+        description: "Stop a pass after this many consecutive 0-new pages (saturation signal)."
+        required: false
+        default: "50"
+      request_delay_min:
+        description: "Min delay between requests (seconds)."
+        required: false
+        default: "4"
+      request_delay_max:
+        description: "Max delay between requests (seconds)."
+        required: false
+        default: "6"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # Worst case: 2 passes × 2000 pages × 6s + filter samples ≈ 7h.
+    # Realistically saturates fast and finishes in 30-90 min.
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "03_requirements.txt"
+
+      - name: Install dependencies
+        run: pip install -r 03_requirements.txt
+
+      - name: Run pagination probe
+        env:
+          MAX_PAGES: ${{ inputs.max_pages }}
+          SATURATION_THRESHOLD: ${{ inputs.saturation_threshold }}
+          REQUEST_DELAY_MIN: ${{ inputs.request_delay_min }}
+          REQUEST_DELAY_MAX: ${{ inputs.request_delay_max }}
+        run: python 06_probe_pagination.py 2>&1 | tee probe.log
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-results
+          path: |
+            probe.log
+            probe-summary.json
+          retention-days: 30

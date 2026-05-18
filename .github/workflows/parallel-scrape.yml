@@ -1,0 +1,89 @@
+# Parallel Etimad scrape via Bright Data residential proxies.
+# Designed for the full 283k backfill. Always smoke-test first.
+#
+# Secrets required (Settings → Secrets and variables → Actions):
+#   BRIGHTDATA_PROXY_URL — full URL with the literal {session} token for IP rotation, e.g.
+#     http://brd-customer-hl_abc123-zone-residential-session-{session}:PASSWORD@brd.superproxy.io:33335
+#   SUPABASE_URL, SUPABASE_SERVICE_KEY — same as the existing scrape workflow.
+name: Parallel Scrape (Bright Data)
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_test:
+        description: "Smoke test (2 shards × 100 pages, 50 details). ALWAYS RUN THIS FIRST."
+        required: true
+        type: boolean
+        default: true
+      mode:
+        description: "Phase: listing (enumerate IDs only) / details / both"
+        required: true
+        type: choice
+        options: [listing, details, both]
+        default: listing
+      shard_strategy:
+        description: "How to shard. type_subactivity_sort = the activity-tree strategy (177 shards, ~86% coverage of 283k)."
+        required: true
+        type: choice
+        options: [type_subactivity_sort, sort_flip, type, type_sort, single]
+        default: type_subactivity_sort
+      shard_concurrency:
+        description: "Number of shards processed in parallel."
+        required: false
+        default: "10"
+      detail_concurrency:
+        description: "Number of detail fetches in parallel."
+        required: false
+        default: "50"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "03_requirements.txt"
+
+      - name: Install dependencies
+        run: pip install -r 03_requirements.txt python-dotenv
+
+      - name: Restore checkpoint
+        # Unique key per run so cache always saves; restore-keys finds the latest prior run.
+        uses: actions/cache@v4
+        with:
+          path: parallel-checkpoint.json
+          key: parallel-checkpoint-${{ inputs.shard_strategy }}-${{ inputs.mode }}-${{ github.run_id }}
+          restore-keys: |
+            parallel-checkpoint-${{ inputs.shard_strategy }}-${{ inputs.mode }}-
+            parallel-checkpoint-${{ inputs.shard_strategy }}-
+
+      - name: Run scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          BRIGHTDATA_PROXY_URL: ${{ secrets.BRIGHTDATA_PROXY_URL }}
+          MODE: ${{ inputs.mode }}
+          SHARD_STRATEGY: ${{ inputs.shard_strategy }}
+          SHARD_CONCURRENCY: ${{ inputs.shard_concurrency }}
+          DETAIL_CONCURRENCY: ${{ inputs.detail_concurrency }}
+          LIMIT_SHARDS: ${{ inputs.smoke_test && '2' || '0' }}
+          LIMIT_PAGES_PER_SHARD: ${{ inputs.smoke_test && '100' || '0' }}
+          LIMIT_DETAILS: ${{ inputs.smoke_test && '50' || '0' }}
+        run: python 07_parallel_scraper.py 2>&1 | tee parallel.log
+
+      - name: Upload logs and checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parallel-${{ inputs.mode }}-${{ inputs.shard_strategy }}-${{ github.run_id }}
+          path: |
+            parallel.log
+            parallel-checkpoint.json
+          retention-days: 30
