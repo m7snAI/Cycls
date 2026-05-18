@@ -73,6 +73,11 @@ LIMIT_DETAILS = int(os.environ.get("LIMIT_DETAILS", "0"))
 SHARD_SATURATION_THRESHOLD = int(os.environ.get("SHARD_SATURATION_THRESHOLD", "20"))
 MAX_PAGES_PER_SHARD = int(os.environ.get("MAX_PAGES_PER_SHARD", "3000"))
 
+# Per-page jittered delay. Smoke test (2026-05-18) showed ~8 req/sec back-to-back
+# trips per-IP rate limits within ~5 min. ~2s/page keeps a sustained run polite.
+REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN", "1.5"))
+REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX", "2.5"))
+
 TIMEOUT = 30
 MAX_RETRIES = 3
 UPSERT_BATCH_SIZE = 50
@@ -551,6 +556,8 @@ async def scrape_shard(shard_label: str, shard_params: dict, repo: Repo,
 
     max_pages = LIMIT_PAGES_PER_SHARD or MAX_PAGES_PER_SHARD
     for page in range(1, max_pages + 1):
+        if page > 1 and REQUEST_DELAY_MAX > 0:
+            await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
         params = {"PageNumber": page, "PageSize": PAGE_SIZE,
                   "PublishDateId": PUBLISH_DATE_ID, **shard_params}
         resp = await fetch_json(params, attempt_label=f"{shard_label} p{page}")

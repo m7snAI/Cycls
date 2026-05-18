@@ -44,6 +44,14 @@ on:
         required: true
         type: boolean
         default: true
+      request_delay_min:
+        description: "Min seconds between pages within a shard (jitter). Stays polite to avoid per-IP rate limits."
+        required: false
+        default: "1.5"
+      request_delay_max:
+        description: "Max seconds between pages within a shard (jitter)."
+        required: false
+        default: "2.5"
 
 jobs:
   scrape:
@@ -84,6 +92,8 @@ jobs:
           SHARD_CONCURRENCY: ${{ inputs.shard_concurrency }}
           DETAIL_CONCURRENCY: ${{ inputs.detail_concurrency }}
           USE_PROXY: ${{ inputs.use_proxy }}
+          REQUEST_DELAY_MIN: ${{ inputs.request_delay_min }}
+          REQUEST_DELAY_MAX: ${{ inputs.request_delay_max }}
           LIMIT_SHARDS: ${{ inputs.smoke_test && '2' || '0' }}
           LIMIT_PAGES_PER_SHARD: ${{ inputs.smoke_test && '100' || '0' }}
           LIMIT_DETAILS: ${{ inputs.smoke_test && '50' || '0' }}
