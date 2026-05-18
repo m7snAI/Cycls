@@ -35,6 +35,11 @@ on:
         description: "Number of detail fetches in parallel."
         required: false
         default: "50"
+      use_proxy:
+        description: "Route requests through Bright Data. Uncheck to test from the GHA runner IP directly (e.g. to isolate proxy-vs-session issues on the details endpoint)."
+        required: true
+        type: boolean
+        default: true
 
 jobs:
   scrape:
@@ -73,6 +78,7 @@ jobs:
           SHARD_STRATEGY: ${{ inputs.shard_strategy }}
           SHARD_CONCURRENCY: ${{ inputs.shard_concurrency }}
           DETAIL_CONCURRENCY: ${{ inputs.detail_concurrency }}
+          USE_PROXY: ${{ inputs.use_proxy }}
           LIMIT_SHARDS: ${{ inputs.smoke_test && '2' || '0' }}
           LIMIT_PAGES_PER_SHARD: ${{ inputs.smoke_test && '100' || '0' }}
           LIMIT_DETAILS: ${{ inputs.smoke_test && '50' || '0' }}

@@ -58,6 +58,7 @@ PAGE_SIZE = 24
 PUBLISH_DATE_ID = int(os.environ.get("PUBLISH_DATE_ID", "0"))  # 0=all-time
 
 BRIGHTDATA_PROXY_URL = os.environ.get("BRIGHTDATA_PROXY_URL", "").strip()
+USE_PROXY = os.environ.get("USE_PROXY", "true").strip().lower() not in ("false", "0", "no", "")
 SHARD_STRATEGY = os.environ.get("SHARD_STRATEGY", "type_sort")
 MODE = os.environ.get("MODE", "both")  # listing | details | both
 
@@ -88,8 +89,10 @@ log = logging.getLogger("etimad-parallel")
 
 # ---------- Proxy ----------
 def proxy_for_request() -> str | None:
-    """Return a proxy URL with {session} substituted (or the URL as-is)."""
-    if not BRIGHTDATA_PROXY_URL:
+    """Return a proxy URL with {session} substituted (or the URL as-is).
+    Returns None if USE_PROXY=false even when BRIGHTDATA_PROXY_URL is set —
+    lets us test direct-runner-IP behavior without unsetting the secret."""
+    if not USE_PROXY or not BRIGHTDATA_PROXY_URL:
         return None
     if "{session}" in BRIGHTDATA_PROXY_URL:
         session = f"{random.randint(0, 2**31):x}"
@@ -158,10 +161,15 @@ async def fetch_html(url: str, params: dict | None = None, referer: str | None =
                 if params and "X-Requested-With" in (params.get("_x_requested_with") or ""):
                     headers["X-Requested-With"] = "XMLHttpRequest"
                 r = await client.get(url, params=params or {}, headers=headers)
-                if r.status_code == 200 and r.text:
+                final_host = (r.url.host or "") if r.url else ""
+                if "login.etimad.sa" in final_host:
+                    log.warning("[%s] redirected to login (auth-walled) attempt=%d/%d",
+                                attempt_label, attempt + 1, MAX_RETRIES)
+                elif r.status_code == 200 and r.text:
                     return r.text
-                log.warning("[%s] HTTP %d attempt=%d/%d for %s",
-                            attempt_label, r.status_code, attempt + 1, MAX_RETRIES, url)
+                else:
+                    log.warning("[%s] HTTP %d attempt=%d/%d for %s",
+                                attempt_label, r.status_code, attempt + 1, MAX_RETRIES, url)
         except httpx.RequestError as e:
             log.warning("[%s] net error attempt=%d/%d: %s", attempt_label, attempt + 1, MAX_RETRIES, e)
         await asyncio.sleep(2 * (attempt + 1))
@@ -626,29 +634,84 @@ async def run_listing(repo: Repo, run_id: int):
 
 # ---------- DETAILS phase ----------
 async def fetch_one_detail(tid: str, detail_url: str, base_raw: dict | None) -> dict | None:
+    """Fetch detail + relations using a single AsyncClient so session cookies
+    set by the listing-page warmup carry through to the detail and relations
+    endpoints — matching the working flow in 02_scraper.py.
+    """
     label = f"detail {tid[:16]}"
-    html = await fetch_html(detail_url, referer=LISTING_REFERER, attempt_label=label)
-    if not html:
-        return None
-    fields = parse_detail_page(html)
-    relations_html = await fetch_html(
-        RELATIONS_URL,
-        params={"tenderIdStr": tid, "_x_requested_with": "XMLHttpRequest"},
-        referer=detail_url,
-        attempt_label=f"rel {tid[:16]}",
-    )
-    raw = dict(base_raw or {})
-    if relations_html:
-        rel = parse_relations_html(relations_html)
-        rel_raw = rel.pop("_raw", None)
-        if rel.get("place"):
-            fields["place"] = rel["place"]
-        if rel_raw:
-            raw["relations"] = rel_raw
-    row = {"etimad_tender_id": tid, "raw_data": raw,
-           "scraped_at": datetime.now(timezone.utc).isoformat()}
-    row.update({k: v for k, v in fields.items() if v is not None})
-    return row
+    ua = random.choice(USER_AGENTS)
+    for attempt in range(MAX_RETRIES):
+        proxy = proxy_for_request()
+        try:
+            async with httpx.AsyncClient(
+                timeout=TIMEOUT,
+                follow_redirects=True,
+                proxy=proxy,
+                headers={"User-Agent": ua,
+                         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8"},
+            ) as client:
+                # Warmup: hit the listing page to establish session cookies
+                await client.get(
+                    LISTING_REFERER,
+                    headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+                )
+                # Detail
+                rd = await client.get(
+                    detail_url,
+                    headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                             "Referer": LISTING_REFERER},
+                )
+                final_host = (rd.url.host or "") if rd.url else ""
+                if "login.etimad.sa" in final_host:
+                    log.warning("[%s] auth-walled (redirected to login) attempt=%d/%d",
+                                label, attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                if rd.status_code != 200 or not rd.text:
+                    log.warning("[%s] HTTP %d attempt=%d/%d",
+                                label, rd.status_code, attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                fields = parse_detail_page(rd.text)
+                # Canary: a real detail page always has tender_name. Empty/missing means
+                # we got a login page, an error page, or the parser couldn't read it.
+                # Skip rather than upsert a row with all-NULL non-id columns.
+                if not fields.get("tender_name"):
+                    log.warning("[%s] parsed but no tender_name — skipping (likely non-detail HTML)",
+                                label)
+                    return None
+                # Relations (best-effort; failure is non-fatal)
+                raw = dict(base_raw or {})
+                try:
+                    rr = await client.get(
+                        RELATIONS_URL,
+                        params={"tenderIdStr": tid, "_x_requested_with": "XMLHttpRequest"},
+                        headers={"Accept": "text/html,*/*",
+                                 "Referer": detail_url,
+                                 "X-Requested-With": "XMLHttpRequest"},
+                    )
+                    rr_host = (rr.url.host or "") if rr.url else ""
+                    if rr.status_code == 200 and rr.text and "login.etimad.sa" not in rr_host:
+                        rel = parse_relations_html(rr.text)
+                        rel_raw = rel.pop("_raw", None)
+                        if rel.get("place"):
+                            fields["place"] = rel["place"]
+                        if rel_raw:
+                            raw["relations"] = rel_raw
+                    else:
+                        log.warning("[rel %s] HTTP %d — proceeding without relations",
+                                    tid[:16], rr.status_code)
+                except httpx.RequestError as e:
+                    log.warning("[rel %s] net error: %s", tid[:16], e)
+                row = {"etimad_tender_id": tid, "raw_data": raw,
+                       "scraped_at": datetime.now(timezone.utc).isoformat()}
+                row.update({k: v for k, v in fields.items() if v is not None})
+                return row
+        except httpx.RequestError as e:
+            log.warning("[%s] net error attempt=%d/%d: %s",
+                        label, attempt + 1, MAX_RETRIES, e)
+        await asyncio.sleep(2 * (attempt + 1))
+    return None
 
 
 async def run_details(repo: Repo):
@@ -711,7 +774,7 @@ async def main_async():
     repo = Repo(url, key)
     run_id = await asyncio.to_thread(repo.start_run)
     log.info("Started parallel run #%d  proxy=%s  strategy=%s  mode=%s",
-             run_id, bool(BRIGHTDATA_PROXY_URL), SHARD_STRATEGY, MODE)
+             run_id, bool(USE_PROXY and BRIGHTDATA_PROXY_URL), SHARD_STRATEGY, MODE)
 
     error_msg = None
     try:
