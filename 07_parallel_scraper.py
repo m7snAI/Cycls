@@ -502,12 +502,16 @@ async def scrape_shard(shard_label: str, shard_params: dict, repo: Repo,
     """Walk one shard sequentially, batch-upsert as we go."""
     log.info("[%s] starting", shard_label)
     consecutive_zero = 0
+    consecutive_fail = 0
     pages_walked = 0
     new_ids_in_shard = 0
     buffer: list[dict] = []
     total_upserted_new = 0
     total_upserted_upd = 0
     api_total = None
+    # If we see this many failed pages in a row, the IP has likely hit a WAF wall
+    # for this shard — bail out to save retry budget for other shards.
+    consecutive_fail_threshold = int(os.environ.get("SHARD_FAIL_THRESHOLD", "8"))
 
     max_pages = LIMIT_PAGES_PER_SHARD or MAX_PAGES_PER_SHARD
     for page in range(1, max_pages + 1):
@@ -515,8 +519,15 @@ async def scrape_shard(shard_label: str, shard_params: dict, repo: Repo,
                   "PublishDateId": PUBLISH_DATE_ID, **shard_params}
         resp = await fetch_json(params, attempt_label=f"{shard_label} p{page}")
         if not resp:
-            log.warning("[%s] page %d: failed, skipping", shard_label, page)
+            consecutive_fail += 1
+            log.warning("[%s] page %d: failed (consec_fail=%d/%d)",
+                        shard_label, page, consecutive_fail, consecutive_fail_threshold)
+            if consecutive_fail >= consecutive_fail_threshold:
+                log.warning("[%s] %d consecutive page failures — IP likely WAF-walled, stopping shard",
+                            shard_label, consecutive_fail)
+                break
             continue
+        consecutive_fail = 0
         pages_walked += 1
         items = resp.get("data") or []
         if api_total is None:
