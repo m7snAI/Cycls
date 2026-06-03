@@ -49,8 +49,15 @@ create table if not exists public.tenders (
     first_seen_at timestamptz default now() not null,
     last_seen_at timestamptz default now() not null,
     scraped_at timestamptz default now() not null,
-    is_active boolean default true         -- لو المنافسة لسه ظاهرة في الـ scrape الأخير
+    is_active boolean default true,        -- لو المنافسة لسه ظاهرة في الـ scrape الأخير
+
+    -- آخر مرة عملنا فيها check على الترسية (الـ awards). بنستخدمها عشان مانعملش
+    -- re-fetch للمنافسات اللي اعتمدت ترسيتها بس اعتماد لسه مانشرش بيانات المتقدمين.
+    awards_last_checked timestamptz
 );
+
+-- للـ DBs الموجودة بالفعل (create table if not exists مش بيضيف الـ column ده):
+alter table public.tenders add column if not exists awards_last_checked timestamptz;
 
 -- Indexes للأداء
 create index if not exists idx_tenders_status on public.tenders(tender_status);
@@ -106,3 +113,27 @@ order by last_offer_date asc nulls last;
 -- Row Level Security — لو هتعرض الداتا في app للعملاء
 -- alter table public.tenders enable row level security;
 -- create policy "Anyone can read tenders" on public.tenders for select using (true);
+
+-- =============================================================
+-- Tender Awards — bidders + offers + winners for closed tenders
+-- =============================================================
+-- Sourced from /Tender/GetAwardingResultsForVisitorViewComponenet
+-- for tenders with status "تم اعتماد الترسية".
+create table if not exists public.tender_awards (
+    id bigserial primary key,
+    etimad_tender_id text not null references public.tenders(etimad_tender_id) on delete cascade,
+    group_id integer not null,                       -- data-id من endpoint الـ Groups
+    group_name text,                                 -- اسم الحزمة (مثلاً "حزمة افتراضية")
+    bidder_name text not null,                       -- اسم المورد
+    offer_value numeric(18,2),                       -- قيمة العرض المالي
+    tech_evaluation text,                            -- "مطابق" / "غير مطابق" (للـ submitted فقط)
+    award_value numeric(18,2),                       -- قيمة الترسية (للـ awarded فقط)
+    role text not null check (role in ('submitted','awarded')),
+    scraped_at timestamptz default now() not null,
+    unique(etimad_tender_id, group_id, bidder_name, role)
+);
+
+create index if not exists idx_awards_tender on public.tender_awards(etimad_tender_id);
+create index if not exists idx_awards_bidder on public.tender_awards(bidder_name);
+create index if not exists idx_awards_role on public.tender_awards(role);
+

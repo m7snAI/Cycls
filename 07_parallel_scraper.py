@@ -34,7 +34,8 @@ import random
 import asyncio
 import calendar
 import logging
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin, quote
@@ -54,6 +55,9 @@ BASE_URL = "https://tenders.etimad.sa"
 LISTING_API_URL = f"{BASE_URL}/Tender/AllSupplierTendersForVisitorAsync"
 LISTING_REFERER = f"{BASE_URL}/Tender/AllTendersForVisitor"
 RELATIONS_URL = f"{BASE_URL}/Tender/GetRelationsDetailsViewComponenet"
+AWARDING_GROUPS_URL = f"{BASE_URL}/Tender/GetAwardingTenderGroupsForVisitorViewComponent"
+AWARDING_RESULTS_URL = f"{BASE_URL}/Tender/GetAwardingResultsForVisitorViewComponenet"
+AWARDED_STATUS = "تم اعتماد الترسية"
 
 PAGE_SIZE = 24
 PUBLISH_DATE_ID = int(os.environ.get("PUBLISH_DATE_ID", "0"))  # 0=all-time
@@ -65,6 +69,14 @@ MODE = os.environ.get("MODE", "both")  # listing | details | both
 
 SHARD_CONCURRENCY = int(os.environ.get("SHARD_CONCURRENCY", "10"))
 DETAIL_CONCURRENCY = int(os.environ.get("DETAIL_CONCURRENCY", "50"))
+AWARD_CONCURRENCY = int(os.environ.get("AWARD_CONCURRENCY", "10"))
+LIMIT_AWARDS = int(os.environ.get("LIMIT_AWARDS", "0"))
+# Awarded-status tenders that come back empty (Etimad hasn't published the
+# bidder/award breakdown yet) get stamped tenders.awards_last_checked and are
+# skipped on subsequent runs until this many days pass — then re-checked once,
+# in case Etimad published late. Keeps the recurring awards job short instead of
+# re-fetching ~13k permanent-empties every run. 0 = re-check every run (old behavior).
+AWARDS_RECHECK_DAYS = int(os.environ.get("AWARDS_RECHECK_DAYS", "30"))
 
 LIMIT_SHARDS = int(os.environ.get("LIMIT_SHARDS", "0"))
 LIMIT_PAGES_PER_SHARD = int(os.environ.get("LIMIT_PAGES_PER_SHARD", "0"))
@@ -91,6 +103,44 @@ USER_AGENTS = [
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("etimad-parallel")
+
+
+# ---------- Rate limiter ----------
+class AsyncRateLimiter:
+    """Token-bucket-ish rate limiter for asyncio. Each acquire() blocks until
+    the call falls within the policy of max N calls per period seconds.
+
+    Used to respect Etimad's explicit `max 10 calls per 1 minute` quota on the
+    awarding-results endpoint (the 429 body says exactly that). Without this
+    limiter, concurrency=5 routinely overran the cap and ~30% of tenders ended
+    up "empty" because all 3 of their retry attempts fell within the same
+    bad-minute window — not because Etimad had no data for them."""
+
+    def __init__(self, max_calls: int, period_s: float):
+        self.max_calls = max_calls
+        self.period_s = period_s
+        self._timestamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                # Drop timestamps older than the period — they're outside the window.
+                while self._timestamps and self._timestamps[0] <= now - self.period_s:
+                    self._timestamps.popleft()
+                if len(self._timestamps) < self.max_calls:
+                    self._timestamps.append(now)
+                    return
+                # Otherwise: wait until the oldest call ages out. Compute outside the
+                # lock to let other waiters re-check after sleep.
+                wait_s = self._timestamps[0] + self.period_s - now + 0.05
+            await asyncio.sleep(max(wait_s, 0.1))
+
+
+# Etimad caps the Results endpoint at 10/min per IP. Use 9 for a safety buffer
+# (clock drift, retries, etc.); even 1 leftover slot avoids the 429 cliff.
+RESULTS_RATE_LIMITER = AsyncRateLimiter(max_calls=9, period_s=60.0)
 
 
 # ---------- Proxy ----------
@@ -324,6 +374,54 @@ def parse_detail_page(html: str) -> dict:
     return fields
 
 
+def parse_awarding_groups(html: str) -> list[tuple[int, str]]:
+    """Parse the Groups endpoint HTML into [(group_id, group_name), ...].
+    Each tender has 1+ groups (lots). Most have a single "حزمة افتراضية" default."""
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[tuple[int, str]] = []
+    for a in soup.select("a.awardingGroupForVisitor"):
+        gid_raw = a.get("data-id")
+        if not gid_raw:
+            continue
+        try:
+            gid = int(gid_raw)
+        except (TypeError, ValueError):
+            continue
+        out.append((gid, a.get_text(" ", strip=True)))
+    return out
+
+
+def parse_awarding_results(html: str, group_id: int, group_name: str | None) -> list[dict]:
+    """Parse the Results endpoint HTML into bidder rows.
+    The endpoint returns two tables: first is submitted (bidder, offer, tech_eval),
+    second is awarded (bidder, offer, award_value). Returns a flat list of dicts
+    with role='submitted' or 'awarded' to match the tender_awards schema."""
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.select("table")
+    out: list[dict] = []
+    for ti, tbl in enumerate(tables[:2]):  # only first two tables matter
+        role = "submitted" if ti == 0 else "awarded"
+        for tr in tbl.select("tbody tr"):
+            cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
+            if len(cells) < 2 or not cells[0]:
+                continue
+            row = {
+                "group_id": group_id,
+                "group_name": group_name,
+                "bidder_name": cells[0],
+                "offer_value": _parse_money(cells[1]) if len(cells) > 1 else None,
+                "role": role,
+            }
+            if role == "submitted":
+                row["tech_evaluation"] = cells[2] if len(cells) > 2 else None
+                row["award_value"] = None
+            else:
+                row["tech_evaluation"] = None
+                row["award_value"] = _parse_money(cells[2]) if len(cells) > 2 else None
+            out.append(row)
+    return out
+
+
 def parse_relations_html(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     pairs: dict[str, str] = {}
@@ -466,6 +564,25 @@ class Repo:
         kwargs["finished_at"] = datetime.now(timezone.utc).isoformat()
         self.c.table("scrape_runs").update(kwargs).eq("id", run_id).execute()
 
+    def reap_stale_runs(self, current_run_id: int) -> list[int]:
+        """Mark any still-'running' rows from crashed/cancelled prior runs as
+        failed. Prior runs leak 'running' because a workflow timeout or Ctrl-C
+        kills the process before finish_run fires. Excludes the current run.
+        Returns the reaped ids."""
+        r = (self.c.table("scrape_runs")
+             .select("id")
+             .eq("status", "running")
+             .neq("id", current_run_id)
+             .execute())
+        ids = [row["id"] for row in (r.data or [])]
+        if ids:
+            self.c.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": "reaped on next-run startup (process died before finish_run)",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            }).in_("id", ids).execute()
+        return ids
+
     def upsert_tenders(self, tenders: list[dict]) -> tuple[int, int]:
         if not tenders:
             return 0, 0
@@ -479,10 +596,26 @@ class Repo:
             existing_ids.update(row["etimad_tender_id"] for row in r.data)
         new_n = sum(1 for t in tenders if t["etimad_tender_id"] not in existing_ids)
         upd_n = len(tenders) - new_n
+        # Retry each batch on transient Supabase/HTTP blips. A multi-day details
+        # run regularly hits home-network connection resets (WinError 10054 /
+        # RemoteProtocolError); without this a single blip kills the whole run.
+        UPSERT_RETRIES = 8
         for i in range(0, len(tenders), BATCH):
-            self.c.table("tenders").upsert(
-                tenders[i:i + BATCH], on_conflict="etimad_tender_id"
-            ).execute()
+            batch = tenders[i:i + BATCH]
+            for attempt in range(UPSERT_RETRIES):
+                try:
+                    self.c.table("tenders").upsert(
+                        batch, on_conflict="etimad_tender_id"
+                    ).execute()
+                    break
+                except (httpx.RemoteProtocolError, httpx.RequestError,
+                        httpx.HTTPStatusError) as e:
+                    if attempt == UPSERT_RETRIES - 1:
+                        raise
+                    sleep_s = min(30, 3 * (attempt + 1) + attempt * attempt)
+                    log.warning("upsert_tenders batch retry %d/%d in %ds: %s",
+                                attempt + 1, UPSERT_RETRIES, sleep_s, e)
+                    time.sleep(sleep_s)
         return new_n, upd_n
 
     def get_ids_needing_details(self, limit: int = 0) -> list[str]:
@@ -509,6 +642,134 @@ class Repo:
                 out = out[:limit]
                 break
         return out
+
+    def get_ids_needing_awards(self, limit: int = 0) -> list[str]:
+        """Return tender IDs with status='تم اعتماد الترسية' that have no rows in
+        tender_awards yet AND weren't checked-and-found-empty within the last
+        AWARDS_RECHECK_DAYS. Dedup checked once at startup, in batches of 1000.
+
+        Falls back gracefully (no empty-skipping) if the awards_last_checked
+        column doesn't exist yet — so a recurring run works before the ALTER
+        TABLE is applied, just less efficiently."""
+        BATCH = 1000
+        # cutoff: tenders stamped more recently than this are skipped as
+        # known-empty. None disables the skip (AWARDS_RECHECK_DAYS=0).
+        cutoff = None
+        if AWARDS_RECHECK_DAYS > 0:
+            cutoff = (datetime.now(timezone.utc)
+                      - timedelta(days=AWARDS_RECHECK_DAYS)).isoformat()
+
+        # Detect whether the awards_last_checked column exists; pick select cols.
+        select_cols = "etimad_tender_id,awards_last_checked"
+        try:
+            self.c.table("tenders").select(select_cols).limit(1).execute()
+        except Exception:
+            log.warning("awards_last_checked column not found — empty-skip "
+                        "disabled (run the ALTER TABLE from 01_supabase_schema.sql)")
+            select_cols = "etimad_tender_id"
+            cutoff = None
+
+        # All awarded-status tenders, skipping recently-checked-empty ones.
+        skip_recent = 0
+        all_ids: list[str] = []
+        offset = 0
+        while True:
+            r = (self.c.table("tenders")
+                 .select(select_cols)
+                 .eq("tender_status", AWARDED_STATUS)
+                 .range(offset, offset + BATCH - 1))
+            rows = r.execute().data or []
+            for row in rows:
+                last = row.get("awards_last_checked") if cutoff else None
+                if last and last >= cutoff:
+                    skip_recent += 1
+                    continue
+                all_ids.append(row["etimad_tender_id"])
+            if len(rows) < BATCH:
+                break
+            offset += BATCH
+        if skip_recent:
+            log.info("AWARDS: skipped %d awarded tenders checked-empty within %dd",
+                     skip_recent, AWARDS_RECHECK_DAYS)
+
+        # IDs already in tender_awards (may have many rows per tender)
+        done_ids: set[str] = set()
+        offset = 0
+        while True:
+            r = (self.c.table("tender_awards")
+                 .select("etimad_tender_id")
+                 .range(offset, offset + BATCH - 1))
+            rows = r.execute().data or []
+            done_ids.update(row["etimad_tender_id"] for row in rows)
+            if len(rows) < BATCH:
+                break
+            offset += BATCH
+
+        remaining = [t for t in all_ids if t not in done_ids]
+        if limit and len(remaining) > limit:
+            remaining = remaining[:limit]
+        return remaining
+
+    def mark_awards_checked(self, ids: list[str]) -> None:
+        """Stamp tenders.awards_last_checked=now() for these ids so empty ones
+        aren't re-fetched every run. Best-effort: silently no-ops if the column
+        doesn't exist yet."""
+        if not ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        BATCH = 200
+        for i in range(0, len(ids), BATCH):
+            batch = ids[i:i + BATCH]
+            try:
+                (self.c.table("tenders")
+                 .update({"awards_last_checked": now})
+                 .in_("etimad_tender_id", batch)
+                 .execute())
+            except Exception as e:
+                log.warning("mark_awards_checked batch failed (column missing?): %s", e)
+                return
+
+    def upsert_awards(self, rows: list[dict]) -> int:
+        """Upsert award rows. Unique constraint on
+        (etimad_tender_id, group_id, bidder_name, role) prevents duplicates.
+        Retries each batch on transient Supabase/HTTP errors — long runs
+        regularly hit HTTP/2 stream resets and they shouldn't kill the job."""
+        if not rows:
+            return 0
+        # Dedupe within input by unique-constraint key. Some Etimad tenders list
+        # the same bidder twice in one group/role (data quirk on their side);
+        # Postgres rejects an upsert that proposes duplicate keys in one batch.
+        # Last occurrence wins.
+        deduped: dict[tuple, dict] = {}
+        for row in rows:
+            key = (row["etimad_tender_id"], row["group_id"],
+                   row["bidder_name"], row["role"])
+            deduped[key] = row
+        rows = list(deduped.values())
+        BATCH = 200
+        # Use longer retry budget than fetch retries: home-network DNS or
+        # ISP outages can last several minutes, and losing a 3-day run to a
+        # transient blip is much worse than waiting it out.
+        UPSERT_RETRIES = 8
+        for i in range(0, len(rows), BATCH):
+            batch = rows[i:i + BATCH]
+            for attempt in range(UPSERT_RETRIES):
+                try:
+                    self.c.table("tender_awards").upsert(
+                        batch,
+                        on_conflict="etimad_tender_id,group_id,bidder_name,role",
+                    ).execute()
+                    break
+                except (httpx.RemoteProtocolError, httpx.RequestError,
+                        httpx.HTTPStatusError) as e:
+                    if attempt == UPSERT_RETRIES - 1:
+                        raise
+                    # backoff: 3, 6, 10, 15, 20, 25, 30, 30s — ~140s total budget
+                    sleep_s = min(30, 3 * (attempt + 1) + attempt * attempt)
+                    log.warning("upsert_awards batch retry %d/%d in %ds: %s",
+                                attempt + 1, UPSERT_RETRIES, sleep_s, e)
+                    time.sleep(sleep_s)
+        return len(rows)
 
     def fetch_tender_skeletons(self, ids: list[str]) -> dict[str, dict]:
         """Get current rows for these IDs (we need detail_url + existing raw_data)."""
@@ -646,6 +907,9 @@ async def run_listing(repo: Repo, run_id: int):
 
     sem = asyncio.Semaphore(SHARD_CONCURRENCY)
     seen_global: set[str] = set()
+    # Counts for THIS run only (skipped/checkpointed shards don't contribute) —
+    # these get written back to scrape_runs so the row isn't all-zero.
+    run_counts = {"found": 0, "new": 0, "updated": 0, "pages": 0}
 
     async def runner(label, params):
         if label in state["completed_shards"]:
@@ -656,6 +920,10 @@ async def run_listing(repo: Repo, run_id: int):
                 result = await scrape_shard(label, params, repo, seen_global)
                 state["shard_results"][label] = result
                 state["completed_shards"].append(label)
+                run_counts["found"] += result["unique"]
+                run_counts["new"] += result["new"]
+                run_counts["updated"] += result["updated"]
+                run_counts["pages"] += result["pages"]
                 save_checkpoint(state)
             except Exception:
                 log.exception("[%s] shard failed", label)
@@ -663,15 +931,27 @@ async def run_listing(repo: Repo, run_id: int):
     await asyncio.gather(*(runner(lbl, prm) for lbl, prm in shards))
 
     total_unique = len(seen_global)
-    total_new = sum(r["new"] for r in state["shard_results"].values())
-    log.info("LISTING done: unique_ids=%d total_new_to_db=%d", total_unique, total_new)
+    log.info("LISTING done: unique_ids=%d new_to_db=%d updated=%d pages=%d",
+             total_unique, run_counts["new"], run_counts["updated"], run_counts["pages"])
+    return run_counts
 
 
 # ---------- DETAILS phase ----------
+DETAIL_WARMUP = os.environ.get("DETAIL_WARMUP", "false").strip().lower() not in ("false", "0", "no", "")
+AWARD_WARMUP = os.environ.get("AWARD_WARMUP", "false").strip().lower() not in ("false", "0", "no", "")
+
+
 async def fetch_one_detail(tid: str, detail_url: str, base_raw: dict | None) -> dict | None:
-    """Fetch detail + relations using a single AsyncClient so session cookies
-    set by the listing-page warmup carry through to the detail and relations
-    endpoints — matching the working flow in 02_scraper.py.
+    """Fetch the detail page (+ relations, best-effort) for one tender.
+
+    The per-tender warmup GET to AllTendersForVisitor was REMOVED by default
+    (DETAIL_WARMUP=false): a 2026-06-03 smoke test showed DetailsForVisitor
+    returns 200 without it, while the warmup endpoint is Etimad's most
+    aggressively rate-limited route — hitting it once per tender triggered a
+    429 cascade that also starved the relations endpoint. Dropping it cuts
+    request volume by a third and keeps the detail fetch clean. Set
+    DETAIL_WARMUP=true to restore the old behavior if a future WAF change
+    makes cookies mandatory again.
     """
     label = f"detail {tid[:16]}"
     ua = random.choice(USER_AGENTS)
@@ -685,11 +965,13 @@ async def fetch_one_detail(tid: str, detail_url: str, base_raw: dict | None) -> 
                 headers={"User-Agent": ua,
                          "Accept-Language": "ar,en-US;q=0.9,en;q=0.8"},
             ) as client:
-                # Warmup: hit the listing page to establish session cookies
-                await client.get(
-                    LISTING_REFERER,
-                    headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
-                )
+                # Warmup (opt-in via DETAIL_WARMUP=true): hit the listing page to
+                # establish session cookies. Off by default — it 429-cascades.
+                if DETAIL_WARMUP:
+                    await client.get(
+                        LISTING_REFERER,
+                        headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+                    )
                 # Detail
                 rd = await client.get(
                     detail_url,
@@ -754,7 +1036,7 @@ async def run_details(repo: Repo):
     ids = await asyncio.to_thread(repo.get_ids_needing_details, LIMIT_DETAILS)
     log.info("DETAILS: %d tenders need details (limit=%d)", len(ids), LIMIT_DETAILS or 0)
     if not ids:
-        return
+        return {"done": 0, "failed": 0}
     skeletons = await asyncio.to_thread(repo.fetch_tender_skeletons, ids)
     log.info("DETAILS: loaded %d skeletons", len(skeletons))
 
@@ -797,6 +1079,172 @@ async def run_details(repo: Repo):
     await asyncio.gather(*(worker(tid) for tid in ids))
     await flush_if_full(force=True)
     log.info("DETAILS done: %d fetched, %d failed", done, failed)
+    return {"done": done, "failed": failed}
+
+
+# ---------- AWARDS phase ----------
+async def fetch_one_award(tid: str) -> list[dict] | None:
+    """Fetch all groups + per-group results for one tender. Returns a list of
+    award rows (each carrying etimad_tender_id, group_id, group_name, bidder_name,
+    offer_value, tech_evaluation, award_value, role) ready for upsert.
+
+    Returns:
+        - [] if the tender has no groups (rare; usually means awarding not yet
+          published despite the status). Treated as success — nothing to insert.
+        - None on hard failure (will be retried by caller's outer loop).
+    """
+    label = f"award {tid[:16]}"
+    ua = random.choice(USER_AGENTS)
+    detail_referer = f"{BASE_URL}/Tender/DetailsForVisitor?STenderId={quote(tid, safe='')}"
+    for attempt in range(MAX_RETRIES):
+        proxy = proxy_for_request()
+        try:
+            async with httpx.AsyncClient(
+                timeout=TIMEOUT,
+                follow_redirects=True,
+                proxy=proxy,
+                headers={"User-Agent": ua,
+                         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8"},
+            ) as client:
+                # Warmup (opt-in via AWARD_WARMUP=true): off by default — like the
+                # details path, hitting AllTendersForVisitor once per tender
+                # 429-storms and starves the awarding endpoints.
+                if AWARD_WARMUP:
+                    await client.get(
+                        LISTING_REFERER,
+                        headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+                    )
+                # Groups
+                rg = await client.get(
+                    AWARDING_GROUPS_URL,
+                    params={"tenderIdStr": tid},
+                    headers={"Accept": "text/html,*/*",
+                             "Referer": detail_referer,
+                             "X-Requested-With": "XMLHttpRequest"},
+                )
+                if rg.status_code != 200 or not rg.text:
+                    log.warning("[%s] groups HTTP %d attempt=%d/%d",
+                                label, rg.status_code, attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                groups = parse_awarding_groups(rg.text)
+                if not groups:
+                    # Empty group list means awarding not announced — nothing to scrape.
+                    # Return [] (success, no rows) so caller doesn't retry endlessly.
+                    return []
+                # Per-group results — each group call has its own retry loop on
+                # 429/5xx, otherwise rate-limit storms drop bidder data silently
+                # and show up as fake "empty awarding" tenders.
+                rows: list[dict] = []
+                all_groups_ok = True
+                for gid, gname in groups:
+                    group_ok = False
+                    for g_attempt in range(MAX_RETRIES):
+                        # Respect Etimad's "max 10 calls/min" on the Results
+                        # endpoint. This global limiter is THE mechanism that
+                        # prevents false-empties; without the acquire() the
+                        # limiter object is dead code (was the case before
+                        # 2026-06-03). Shared across all AWARD_CONCURRENCY workers.
+                        await RESULTS_RATE_LIMITER.acquire()
+                        rr = await client.get(
+                            AWARDING_RESULTS_URL,
+                            params={"tenderIdStr": tid, "groupId": gid},
+                            headers={"Accept": "text/html,*/*",
+                                     "Referer": detail_referer,
+                                     "X-Requested-With": "XMLHttpRequest"},
+                        )
+                        if rr.status_code == 200 and rr.text:
+                            parsed = parse_awarding_results(rr.text, gid, gname)
+                            for row in parsed:
+                                row["etimad_tender_id"] = tid
+                                row["scraped_at"] = datetime.now(timezone.utc).isoformat()
+                                rows.append(row)
+                            group_ok = True
+                            break
+                        log.warning("[%s g%d] results HTTP %d attempt=%d/%d",
+                                    label, gid, rr.status_code, g_attempt + 1, MAX_RETRIES)
+                        await asyncio.sleep(2 * (g_attempt + 1))
+                    if not group_ok:
+                        all_groups_ok = False
+                if not all_groups_ok:
+                    # At least one group still failed after retries — bubble up so
+                    # the tender is counted as failed and retried later.
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                return rows
+        except httpx.RequestError as e:
+            log.warning("[%s] net error attempt=%d/%d: %s",
+                        label, attempt + 1, MAX_RETRIES, e)
+        await asyncio.sleep(2 * (attempt + 1))
+    return None
+
+
+async def run_awards(repo: Repo):
+    log.info("AWARDS phase: fetching ids needing awards from Supabase…")
+    ids = await asyncio.to_thread(repo.get_ids_needing_awards, LIMIT_AWARDS)
+    log.info("AWARDS: %d tenders need awards (limit=%d)", len(ids), LIMIT_AWARDS or 0)
+    if not ids:
+        return {"done": 0, "empty": 0, "failed": 0}
+
+    sem = asyncio.Semaphore(AWARD_CONCURRENCY)
+    buffer: list[dict] = []
+    buffer_lock = asyncio.Lock()
+    # Tenders we successfully checked (empty OR with rows) — stamped with
+    # awards_last_checked so the recurring job skips known-empties next time.
+    checked_ids: list[str] = []
+    checked_lock = asyncio.Lock()
+    done = 0       # fetched (incl. empty-group successes)
+    empty = 0      # got 0 rows (awarding not published)
+    failed = 0     # gave up after MAX_RETRIES
+
+    async def flush_if_full(force=False):
+        nonlocal buffer
+        async with buffer_lock:
+            if not buffer:
+                return
+            if force or len(buffer) >= UPSERT_BATCH_SIZE:
+                batch = buffer
+                buffer = []
+                await asyncio.to_thread(repo.upsert_awards, batch)
+                log.info("AWARDS: flushed %d rows (done=%d empty=%d failed=%d)",
+                         len(batch), done, empty, failed)
+
+    async def flush_checked(force=False):
+        nonlocal checked_ids
+        async with checked_lock:
+            if not checked_ids:
+                return
+            if force or len(checked_ids) >= 500:
+                batch = checked_ids
+                checked_ids = []
+                await asyncio.to_thread(repo.mark_awards_checked, batch)
+
+    async def worker(tid):
+        nonlocal done, empty, failed
+        async with sem:
+            rows = await fetch_one_award(tid)
+            if rows is None:
+                failed += 1
+                return
+            if not rows:
+                empty += 1
+            else:
+                async with buffer_lock:
+                    buffer.extend(rows)
+            async with checked_lock:
+                checked_ids.append(tid)
+            done += 1
+            if done % 100 == 0:
+                log.info("AWARDS progress: done=%d empty=%d failed=%d remaining=%d",
+                         done, empty, failed, len(ids) - done - failed)
+        await flush_if_full()
+        await flush_checked()
+
+    await asyncio.gather(*(worker(tid) for tid in ids))
+    await flush_if_full(force=True)
+    await flush_checked(force=True)
+    log.info("AWARDS done: %d fetched (%d empty), %d failed", done, empty, failed)
+    return {"done": done, "empty": empty, "failed": failed}
 
 
 # ---------- Main ----------
@@ -808,20 +1256,33 @@ async def main_async():
 
     repo = Repo(url, key)
     run_id = await asyncio.to_thread(repo.start_run)
+    reaped = await asyncio.to_thread(repo.reap_stale_runs, run_id)
+    if reaped:
+        log.info("Reaped %d stale 'running' run(s) from prior crashes: %s", len(reaped), reaped)
     log.info("Started parallel run #%d  proxy=%s  strategy=%s  mode=%s",
              run_id, bool(USE_PROXY and BRIGHTDATA_PROXY_URL), SHARD_STRATEGY, MODE)
 
     error_msg = None
+    counters: dict = {}
     try:
         if MODE in ("listing", "both"):
-            await run_listing(repo, run_id)
+            lc = await run_listing(repo, run_id)
+            counters.update(tenders_found=lc["found"], tenders_new=lc["new"],
+                            tenders_updated=lc["updated"], pages_scraped=lc["pages"])
         if MODE in ("details", "both"):
-            await run_details(repo)
-        await asyncio.to_thread(repo.finish_run, run_id, status="success")
+            dc = await run_details(repo)
+            # details enriches existing rows — count fetched as 'updated'
+            counters["tenders_updated"] = counters.get("tenders_updated", 0) + dc["done"]
+        if MODE == "awards":
+            ac = await run_awards(repo)
+            # no awards-specific column; record enriched tenders as 'updated'
+            counters["tenders_updated"] = ac["done"]
+        await asyncio.to_thread(repo.finish_run, run_id, status="success", **counters)
     except Exception as e:
         log.exception("Run failed")
         error_msg = str(e)[:1000]
-        await asyncio.to_thread(repo.finish_run, run_id, status="failed", error_message=error_msg)
+        await asyncio.to_thread(repo.finish_run, run_id, status="failed",
+                                error_message=error_msg, **counters)
         raise
 
 

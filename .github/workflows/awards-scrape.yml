@@ -1,0 +1,63 @@
+# .github/workflows/awards-scrape.yml
+# Recurring awards capture (07_parallel_scraper.py MODE=awards).
+# بيلتقط بيانات المتقدمين + الفائزين للمنافسات اللي حالتها بقت "تم اعتماد الترسية"
+# ولسه مش متسجّلة في tender_awards. الـ get_ids_needing_awards بيستهدف الجديد
+# أوتوماتيك، و awards_last_checked بيمنع إعادة فحص اللي طلعت فاضية (لسه مانشرتش).
+#
+# بيتشغّل أسبوعياً + يدوي. مفيش proxy (الـ awarding endpoints بتشتغل من أي IP،
+# والـ 9/min rate-limiter جوّه السكريبت بيحترم حد إتمام).
+name: Etimad Awards Scrape
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit_awards:
+        description: "Max tenders to check this run (bounds runtime). 0 = all."
+        required: false
+        default: "2000"
+      recheck_days:
+        description: "Re-check empty awarded tenders after N days. 0 = every run."
+        required: false
+        default: "30"
+  schedule:
+    - cron: "0 6 * * 1"   # Monday 06:00 UTC (9am Saudi) — after the daily scrape
+
+jobs:
+  awards:
+    runs-on: ubuntu-latest
+    # 350 min = just under the 6h hard cap so log upload still runs. A bounded
+    # LIMIT_AWARDS run normally finishes well inside this.
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "03_requirements.txt"
+
+      - name: Install dependencies
+        run: pip install -r 03_requirements.txt
+
+      - name: Run awards scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          MODE: awards
+          USE_PROXY: "false"
+          AWARD_CONCURRENCY: "6"
+          LIMIT_AWARDS: ${{ github.event.inputs.limit_awards || '2000' }}
+          AWARDS_RECHECK_DAYS: ${{ github.event.inputs.recheck_days || '30' }}
+        run: python 07_parallel_scraper.py 2>&1 | tee awards-scrape.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: awards-scrape-logs
+          path: "*.log"
+          retention-days: 14

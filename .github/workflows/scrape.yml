@@ -1,6 +1,7 @@
-# احفظ ده في الـ repo: .github/workflows/scrape.yml
-# الـ schedule مغلق حالياً عشان نخلّص الـ backfill الأول يدوي.
-# بعد ما الـ DB توصل لـ ~9600 row، فعّل الـ cron تاني.
+# .github/workflows/scrape.yml
+# Daily incremental scrape (02_scraper.py): الـ active set كله + المنافسات الجديدة،
+# بيـ enrich التفاصيل (الغرض + مكان التنفيذ) ويعطّل اللي اختفت. الـ schedule مفعّل.
+# الـ backfill التاريخي بيتعمل local عن طريق run_backfill.py (منفصل).
 name: Etimad Scrape
 
 on:
@@ -14,8 +15,8 @@ on:
         description: "Max delay between requests (seconds). Default 6."
         required: false
         default: "6"
-  # schedule:
-  #   - cron: "0 3 * * *"   # 6am Saudi time — فعّله بعد ما الـ backfill يخلص
+  schedule:
+    - cron: "0 3 * * *"   # 6am Saudi time (03:00 UTC) — daily incremental: new + active tenders
 
 jobs:
   probe:

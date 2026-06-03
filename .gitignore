@@ -6,14 +6,21 @@
 # Scraper output / logs
 scrape*.log
 scrape*.err.log
+awards*.log
+backfill*.log
 dry_run_*.html
 dry_run_*.json
 response*.txt
 parallel*.log
 parallel-checkpoint.json
+*-checkpoint.json
 probe*.txt
 activities_in_db.txt
 ta_tenders.html
+
+# In-browser details scraper — has the service_role key hard-coded for paste
+# into the browser console. Keep it local; never commit (would leak the key).
+scrape_details_in_browser.js
 
 # IDE / local agent state
 .claude/
