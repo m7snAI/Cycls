@@ -87,8 +87,11 @@ MAX_PAGES_PER_SHARD = int(os.environ.get("MAX_PAGES_PER_SHARD", "3000"))
 
 # Per-page jittered delay. Smoke test (2026-05-18) showed ~8 req/sec back-to-back
 # trips per-IP rate limits within ~5 min. ~2s/page keeps a sustained run polite.
-REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN", "1.5"))
-REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX", "2.5"))
+# `or "..."` (not get-default) so an env var set to EMPTY string still falls
+# back — GHA inputs are "" on triggers that don't supply them, and float("")
+# would crash the scraper at import.
+REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN") or "1.5")
+REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX") or "2.5")
 
 TIMEOUT = 30
 MAX_RETRIES = 3

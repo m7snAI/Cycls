@@ -89,9 +89,15 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          REQUEST_DELAY_MIN: ${{ inputs.request_delay_min }}
-          REQUEST_DELAY_MAX: ${{ inputs.request_delay_max }}
-        run: python scrapers/daily.py 2>&1 | tee scrape.log
+          # `|| '4'` so a scheduled run (where inputs are empty) doesn't pass
+          # an empty string the scraper would choke on.
+          REQUEST_DELAY_MIN: ${{ inputs.request_delay_min || '4' }}
+          REQUEST_DELAY_MAX: ${{ inputs.request_delay_max || '6' }}
+        # pipefail so a Python crash fails the job instead of being masked by
+        # `tee`'s exit 0 (this hid the daily scraper crashing for days).
+        run: |
+          set -o pipefail
+          python scrapers/daily.py 2>&1 | tee scrape.log
 
       - name: Upload logs
         if: always()

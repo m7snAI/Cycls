@@ -51,8 +51,12 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ]
 
-REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN", "4"))   # ثواني بين الطلبات. أقل من 5 ثواني الـ WAF بيرجّع responses فاضية أحياناً.
-REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX", "6"))
+# NOTE: `or "4"` (not a get-default) so an env var set to EMPTY string still
+# falls back. GHA passes `REQUEST_DELAY_MIN: ${{ inputs.x }}` which is "" on
+# scheduled runs (inputs only exist for workflow_dispatch) — float("") crashes
+# the whole scraper at import. This bit the daily cron silently for days.
+REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN") or "4")   # ثواني بين الطلبات. أقل من 5 ثواني الـ WAF بيرجّع responses فاضية أحياناً.
+REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX") or "6")
 MAX_RETRIES = 3
 TIMEOUT = 30
 MAX_PAGES = 1700           # 9600 / PageSize 6 = 1600 صفحة + buffer

@@ -52,7 +52,9 @@ jobs:
           AWARD_CONCURRENCY: "6"
           LIMIT_AWARDS: ${{ github.event.inputs.limit_awards || '2000' }}
           AWARDS_RECHECK_DAYS: ${{ github.event.inputs.recheck_days || '30' }}
-        run: python scrapers/parallel.py 2>&1 | tee awards-scrape.log
+        run: |
+          set -o pipefail
+          python scrapers/parallel.py 2>&1 | tee awards-scrape.log
 
       - name: Upload logs
         if: always()
