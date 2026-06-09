@@ -38,7 +38,7 @@ BASE_URL = "https://tenders.etimad.sa"
 # الـ API بيرجّع كل البيانات الأساسية للمنافسات بدون ما نحتاج نـ parse HTML.
 LISTING_API_URL = f"{BASE_URL}/Tender/AllSupplierTendersForVisitorAsync"
 LISTING_REFERER = f"{BASE_URL}/Tender/AllTendersForVisitor"
-LISTING_PAGE_SIZE = 6  # نفس الـ default بتاع الـ Vue app
+LISTING_PAGE_SIZE = int(os.environ.get("LISTING_PAGE_SIZE") or "24")  # كان 6 (default الـ Vue) لكن بطيء جداً (~1400 صفحة)؛ 24 بيقلّلها 4x
 # PublishDateId=5 هو الـ default filter اللي الـ JS بيضيفه على كل request.
 # لو شيلناه، الـ API بيرجّع 283k tender (كل اللي اتسجلوا) بدل ~9600 النشطين.
 # لو شيلناه كمان، الـ pagination بتقف عند page 1.
@@ -59,8 +59,12 @@ REQUEST_DELAY_MIN = float(os.environ.get("REQUEST_DELAY_MIN") or "4")   # ثوا
 REQUEST_DELAY_MAX = float(os.environ.get("REQUEST_DELAY_MAX") or "6")
 MAX_RETRIES = 3
 TIMEOUT = 30
-MAX_PAGES = 1700           # 9600 / PageSize 6 = 1600 صفحة + buffer
+MAX_PAGES = 1700           # upper bound للأمان؛ الـ loop بيقف لما يوصل totalCount
 UPSERT_BATCH_SIZE = 50     # كل N منافسة، نـ flush للـ DB. بيدّي visibility + crash resilience.
+# حد أقصى لعدد التفاصيل في الـ run الواحد عشان نخلص جوّه الـ GHA timeout (350m).
+# الباقي بيتسحب في الـ runs اللي بعدها (needs_details بيتحسب من الـ DB كل مرة).
+# 0 = من غير حد (للـ runs المحلية الكاملة).
+DETAILS_LIMIT = int(os.environ.get("DETAILS_LIMIT") or "0")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -435,6 +439,22 @@ class SupabaseRepo:
             lambda: self.client.table("scrape_runs").insert({"status": "running"}).execute())
         return r.data[0]["id"]
 
+    def reap_stale_runs(self, current_run_id: int) -> list[int]:
+        """Mark prior 'running' rows (left by a GHA timeout-kill or crash that
+        never reached finish_run) as failed. Excludes the current run."""
+        r = self._with_retry("reap_stale_runs",
+            lambda: self.client.table("scrape_runs").select("id")
+                .eq("status", "running").neq("id", current_run_id).execute())
+        ids = [row["id"] for row in (r.data or [])]
+        if ids:
+            self._with_retry("reap_stale_update",
+                lambda: self.client.table("scrape_runs").update({
+                    "status": "failed",
+                    "error_message": "reaped on next-run startup (timeout/crash before finish_run)",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }).in_("id", ids).execute())
+        return ids
+
     def finish_run(self, run_id: int, **kwargs):
         kwargs["finished_at"] = datetime.now(timezone.utc).isoformat()
         self._with_retry("finish_run",
@@ -525,7 +545,11 @@ def main():
 
     repo = SupabaseRepo(supabase_url, supabase_key)
     run_id = repo.start_run()
-    log.info("Started scrape run #%d", run_id)
+    reaped = repo.reap_stale_runs(run_id)
+    if reaped:
+        log.info("Reaped %d stale 'running' run(s): %s", len(reaped), reaped)
+    log.info("Started scrape run #%d (page_size=%d, details_limit=%d)",
+             run_id, LISTING_PAGE_SIZE, DETAILS_LIMIT)
 
     client = EtimadClient()
     all_tenders: list[dict] = []
@@ -591,6 +615,10 @@ def main():
         # عشان متضربش نفس الصفحة كل يوم.
         needs_details = repo.get_ids_needing_details(seen_ids)
         to_fetch = [t for t in all_tenders if t["etimad_tender_id"] in needs_details]
+        if DETAILS_LIMIT and len(to_fetch) > DETAILS_LIMIT:
+            log.info("Capping details this run to %d of %d needing (rest next run)",
+                     DETAILS_LIMIT, len(to_fetch))
+            to_fetch = to_fetch[:DETAILS_LIMIT]
         log.info("Fetching detail pages for %d tenders (of %d total, skipping %d already complete)…",
                  len(to_fetch), len(all_tenders), len(all_tenders) - len(to_fetch))
 

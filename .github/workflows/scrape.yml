@@ -15,6 +15,10 @@ on:
         description: "Max delay between requests (seconds). Default 6."
         required: false
         default: "6"
+      details_limit:
+        description: "Max detail-page fetches per run (caps runtime under the 350m GHA timeout). 0 = no cap."
+        required: false
+        default: "1000"
   schedule:
     - cron: "0 3 * * *"   # 6am Saudi time (03:00 UTC) — daily incremental: new + active tenders
 
@@ -93,6 +97,7 @@ jobs:
           # an empty string the scraper would choke on.
           REQUEST_DELAY_MIN: ${{ inputs.request_delay_min || '4' }}
           REQUEST_DELAY_MAX: ${{ inputs.request_delay_max || '6' }}
+          DETAILS_LIMIT: ${{ inputs.details_limit || '1000' }}
         # pipefail so a Python crash fails the job instead of being masked by
         # `tee`'s exit 0 (this hid the daily scraper crashing for days).
         run: |
