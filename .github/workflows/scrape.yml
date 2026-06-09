@@ -1,5 +1,5 @@
 # .github/workflows/scrape.yml
-# Daily incremental scrape (02_scraper.py): الـ active set كله + المنافسات الجديدة،
+# Daily incremental scrape (scrapers/daily.py): الـ active set كله + المنافسات الجديدة،
 # بيـ enrich التفاصيل (الغرض + مكان التنفيذ) ويعطّل اللي اختفت. الـ schedule مفعّل.
 # الـ backfill التاريخي بيتعمل local عن طريق run_backfill.py (منفصل).
 name: Etimad Scrape
@@ -80,10 +80,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: "03_requirements.txt"
+          cache-dependency-path: "requirements.txt"
 
       - name: Install dependencies
-        run: pip install -r 03_requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run scraper
         env:
@@ -91,7 +91,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           REQUEST_DELAY_MIN: ${{ inputs.request_delay_min }}
           REQUEST_DELAY_MAX: ${{ inputs.request_delay_max }}
-        run: python 02_scraper.py 2>&1 | tee scrape.log
+        run: python scrapers/daily.py 2>&1 | tee scrape.log
 
       - name: Upload logs
         if: always()

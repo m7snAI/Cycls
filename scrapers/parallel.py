@@ -282,7 +282,7 @@ def tender_from_json(item: dict) -> dict | None:
     }
 
 
-# ---------- Detail page parsing (same as 02_scraper) ----------
+# ---------- Detail page parsing (same as scrapers/daily.py) ----------
 DETAIL_FIELD_LABELS = {
     "الرقم المرجعي": "reference_number", "رقم المنافسة": "tender_number",
     "اسم المنافسة": "tender_name", "نوع المنافسة": "tender_type",
@@ -464,9 +464,11 @@ def _load_activity_probe_data() -> tuple[list[int], dict[tuple[int, int, int], i
     """Load activities + sub-activity counts. activities.json: from /Tender/GetMainActivitiesAsync.
     sub_activity_totals.json: probe results of (main, sub, type) → totalCount.
     Returns (all_main_aids, sub_count_by_key)."""
-    with open("activities.json", encoding="utf-8") as f:
+    # Anchor to repo_root/data regardless of CWD (this file lives in scrapers/).
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    with open(data_dir / "activities.json", encoding="utf-8") as f:
         activities = json.load(f)
-    with open("sub_activity_totals.json", encoding="utf-8") as f:
+    with open(data_dir / "sub_activity_totals.json", encoding="utf-8") as f:
         sub_totals = json.load(f)
     mains = [int(a["value"]) for a in activities
              if str(a.get("value", "")).isdigit() and int(a["value"]) <= 100]
@@ -665,7 +667,7 @@ class Repo:
             self.c.table("tenders").select(select_cols).limit(1).execute()
         except Exception:
             log.warning("awards_last_checked column not found — empty-skip "
-                        "disabled (run the ALTER TABLE from 01_supabase_schema.sql)")
+                        "disabled (run the ALTER TABLE from db/schema.sql)")
             select_cols = "etimad_tender_id"
             cutoff = None
 
