@@ -519,9 +519,21 @@ class SupabaseRepo:
         """
         if not seen_ids:
             return 0
-        # نجيب الـ IDs النشطة حالياً وغير موجودة في seen_ids
-        result = self.client.table("tenders").select("etimad_tender_id").eq("is_active", True).execute()
-        currently_active = {row["etimad_tender_id"] for row in result.data}
+        # نجيب كل الـ IDs النشطة حالياً (paged — PostgREST بيرجّع 1000 صف بس
+        # افتراضياً، فمن غير الـ paging الـ deactivation بتتقفل عند 1000/run).
+        currently_active: set[str] = set()
+        PAGE = 1000
+        offset = 0
+        while True:
+            r = self._with_retry("deactivate-fetch-active",
+                lambda o=offset: self.client.table("tenders")
+                    .select("etimad_tender_id").eq("is_active", True)
+                    .range(o, o + PAGE - 1).execute())
+            rows = r.data or []
+            currently_active.update(row["etimad_tender_id"] for row in rows)
+            if len(rows) < PAGE:
+                break
+            offset += PAGE
         to_deactivate = currently_active - seen_ids
 
         if to_deactivate:
