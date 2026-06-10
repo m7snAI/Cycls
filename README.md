@@ -1,47 +1,47 @@
 # 🏛️ Etimad Tenders → Supabase
 
-سحب منافسات اعتماد (`tenders.etimad.sa`) وتخزينها في Supabase: المنافسات النشطة يومياً،
-backfill تاريخي كامل (~283k منافسة)، وبيانات الترسية (المتقدمين + الفائزين) للمنافسات المغلقة.
+Scrapes Etimad tenders (`tenders.etimad.sa`) and stores them in Supabase: active tenders daily,
+a full historical backfill (~283k tenders), and award data (bidders + winners) for closed tenders.
 
-## 📁 بنية المشروع
+## 📁 Project structure
 
 ```
 etimad_tender/
-├─ README.md                 ← الملف ده
-├─ requirements.txt          ← الـ Python dependencies
-├─ run_backfill.py           ← orchestrator للـ backfill (awards → details)
+├─ README.md                 ← this file
+├─ requirements.txt          ← Python dependencies
+├─ run_backfill.py           ← backfill orchestrator (awards → details)
 ├─ db/
-│  └─ schema.sql             ← جداول Supabase (شغّله مرة واحدة في الـ SQL Editor)
+│  └─ schema.sql             ← Supabase tables (run once in the SQL Editor)
 ├─ scrapers/
-│  ├─ daily.py               ← السحب اليومي: الـ active set + المنافسات الجديدة + التفاصيل
-│  ├─ parallel.py            ← الـ backfill التاريخي المتوازي + سحب الترسية (MODE=awards)
-│  └─ probe.py               ← أداة probe لاكتشاف حد الـ pagination (تشخيص)
+│  ├─ daily.py               ← daily scrape: active set + new tenders + details
+│  ├─ parallel.py            ← parallel historical backfill + awards scrape (MODE=awards)
+│  └─ probe.py               ← probe tool to discover the pagination cap (diagnostic)
 ├─ data/
-│  ├─ activities.json        ← شجرة الأنشطة (للـ sharding في parallel.py)
+│  ├─ activities.json        ← activity tree (used for sharding in parallel.py)
 │  ├─ activity_totals.json
 │  └─ sub_activity_totals.json
 ├─ tools/
-│  └─ scrape_details_in_browser.js   ← سحب التفاصيل من console المتصفح (fallback، فيه الـ key)
+│  └─ scrape_details_in_browser.js   ← scrape details from the browser console (fallback; contains the key)
 └─ .github/workflows/
-   ├─ scrape.yml             ← يومي 6ص توقيت السعودية (scrapers/daily.py)
-   ├─ awards-scrape.yml      ← أسبوعي الإثنين (scrapers/parallel.py MODE=awards)
-   ├─ parallel-scrape.yml    ← يدوي: backfill المتوازي
-   └─ probe-pagination-cap.yml ← يدوي: probe
+   ├─ scrape.yml             ← daily 6am Saudi time (scrapers/daily.py)
+   ├─ awards-scrape.yml      ← weekly on Monday (scrapers/parallel.py MODE=awards)
+   ├─ parallel-scrape.yml    ← manual: parallel backfill
+   └─ probe-pagination-cap.yml ← manual: probe
 ```
 
-## 🚀 الـ Setup
+## 🚀 Setup
 
 ### 1) Supabase project
-- أنشئ project على [supabase.com](https://supabase.com).
-- من `Settings → API` انسخ `Project URL` و `service_role` key (مش الـ anon).
-- ⚠️ الـ service_role key بيتجاوز الـ RLS — احفظه في secrets/`.env` بس، ومتـ commit-هوش.
+- Create a project at [supabase.com](https://supabase.com).
+- From `Settings → API` copy the `Project URL` and the `service_role` key (not the anon key).
+- ⚠️ The service_role key bypasses RLS — keep it in secrets/`.env` only, and never commit it.
 
-### 2) الجداول
-- Dashboard → SQL Editor → New Query → الصق محتوى `db/schema.sql` → Run.
-- بينشئ `tenders`, `scrape_runs`, `tender_awards`, والـ view `active_tenders`.
+### 2) Tables
+- Dashboard → SQL Editor → New Query → paste the contents of `db/schema.sql` → Run.
+- Creates `tenders`, `scrape_runs`, `tender_awards`, and the `active_tenders` view.
 
-### 3) الـ env
-حط الاتنين دول في `.env` (محلياً) و في GitHub repo secrets (للـ Actions):
+### 3) Environment
+Put these two in `.env` (locally) and in the GitHub repo secrets (for Actions):
 ```
 SUPABASE_URL=https://xxxxx.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...
@@ -51,72 +51,72 @@ SUPABASE_SERVICE_KEY=eyJ...
 pip install -r requirements.txt
 ```
 
-## ▶️ التشغيل
+## ▶️ Running
 
-**السحب اليومي** (active set + الجديد + التفاصيل، وبيعطّل اللي اختفى):
+**Daily scrape** (active set + new tenders + details, and deactivates anything that disappeared):
 ```bash
 python scrapers/daily.py
 ```
-بيشتغل تلقائي كل يوم عن طريق `scrape.yml` (cron 6ص السعودية).
+Runs automatically every day via `scrape.yml` (cron, 6am Saudi time).
 
-**الـ backfill التاريخي** (awards الأول، بعدها details — resumable من الـ DB):
+**Historical backfill** (awards first, then details — resumable from the DB):
 ```bash
 USE_PROXY=false python run_backfill.py > backfill.log 2>&1
 ```
-الـ orchestrator بيشغّل `scrapers/parallel.py` على مراحل ويعيد التشغيل لو في crash.
-tunables: `AWARD_CONCURRENCY`, `DETAIL_CONCURRENCY`, `DETAIL_BATCH`, `SKIP_AWARDS`, `SKIP_DETAILS`.
+The orchestrator runs `scrapers/parallel.py` in stages and restarts it on a crash.
+Tunables: `AWARD_CONCURRENCY`, `DETAIL_CONCURRENCY`, `DETAIL_BATCH`, `SKIP_AWARDS`, `SKIP_DETAILS`.
 
-**الترسية بس** (المتقدمين + الفائزين للمنافسات حالتها "تم اعتماد الترسية"):
+**Awards only** (bidders + winners for tenders in the "award approved" state):
 ```bash
 MODE=awards python scrapers/parallel.py
 ```
-بيشتغل تلقائي أسبوعياً عن طريق `awards-scrape.yml`. بيستهدف الجديد أوتوماتيك
-(`get_ids_needing_awards`) و `awards_last_checked` بيمنع إعادة فحص اللي طلعت فاضية.
+Runs automatically every week via `awards-scrape.yml`. It auto-targets new tenders
+(`get_ids_needing_awards`), and `awards_last_checked` prevents re-checking ones that came back empty.
 
-> **DNS:** على ويندوز محلياً ممكن تشوف `getaddrinfo failed` متقطّع تحت الضغط — حط DNS
-> ثابت (`1.1.1.1`). كل المراحل resumable فمش بتخسر تقدّم.
+> **DNS:** locally on Windows you may see intermittent `getaddrinfo failed` under load — set a
+> fixed DNS (`1.1.1.1`). Every stage is resumable, so no progress is lost.
 
-## 📊 استخدام الداتا
+## 📊 Using the data
 
 ```sql
--- المنافسات النشطة
+-- active tenders
 select * from active_tenders where last_offer_date > now()
 order by last_offer_date asc limit 50;
 
--- بحث نصي بالعربي (trigram)
+-- Arabic full-text search (trigram); e.g. 'صيانة' = "maintenance"
 select tender_name, agency_name, last_offer_date from tenders
 where tender_name % 'صيانة' and is_active = true
 order by similarity(tender_name, 'صيانة') desc limit 20;
 
--- المتقدمين والفائزين لمنافسة
+-- bidders and winners for a tender
 select bidder_name, offer_value, tech_evaluation, award_value, role
 from tender_awards where etimad_tender_id = '<id>' order by role, offer_value;
 
--- تتبع الـ scrapes
+-- track scrapes
 select * from scrape_runs order by started_at desc limit 10;
 ```
 
-## 🔧 مشاكل شائعة
+## 🔧 Common issues
 
-| المشكلة | الحل |
-|---------|------|
-| `HTTP 429 / Too Many Requests` | الـ IP وصل حد الـ rate. الـ scripts فيها rate-limiter + retries؛ قلّل الـ concurrency أو استنى |
-| `HTTP 403` / redirect لـ login | بعض الـ endpoints auth-walled للزوار — طبيعي، الكود بيتعامل معاه |
-| `getaddrinfo failed` | DNS محلي بيتقطّع — حط `1.1.1.1`. resumable فمفيش خسارة |
-| `place` فاضي في صفوف كتير | الـ relations endpoint بيـ 429 تحت الـ concurrency؛ الـ daily scraper (sequential) بيعبّيه للنشطة |
+| Issue | Fix |
+|-------|-----|
+| `HTTP 429 / Too Many Requests` | The IP hit the rate limit. The scripts have a rate-limiter + retries; lower the concurrency or wait |
+| `HTTP 403` / redirect to login | Some endpoints are auth-walled for visitors — expected, the code handles it |
+| `getaddrinfo failed` | Local DNS dropping out — set `1.1.1.1`. Resumable, so nothing is lost |
+| Empty `place` on many rows | The relations endpoint 429s under concurrency; the daily scraper (sequential) fills it in for active tenders |
 
-## 📝 ملاحظات
+## 📝 Notes
 
-- **المرفقات:** الـ visitor view ما بيعرضش روابط تحميل لغير الموردين المسجّلين. للوصول الرسمي
-  والمستدام قدّم على الـ API الرسمي: `apiportal.etimad.sa`.
-- **`tender_purpose`** بييجي من صفحة التفاصيل (موثوق)، **`place`** من الـ relations endpoint
-  (بيـ rate-limit تحت الـ backfill — أعلى تغطية في الـ daily scraper).
-- الـ Arabic labels للحقول في `DETAIL_FIELD_LABELS` (في `scrapers/parallel.py` و `scrapers/daily.py`)
-  ممكن تحتاج تعديل لو اعتماد غيّرت الـ HTML.
+- **Attachments:** the visitor view does not expose download links to non-registered suppliers. For
+  official, sustainable access, apply for the official API: `apiportal.etimad.sa`.
+- **`tender_purpose`** comes from the details page (reliable), **`place`** from the relations endpoint
+  (rate-limited during backfill — higher coverage in the daily scraper).
+- The Arabic field labels in `DETAIL_FIELD_LABELS` (in `scrapers/parallel.py` and `scrapers/daily.py`)
+  may need tweaking if Etimad changes their HTML.
 
-## 🛣️ خطوات بعدية
+## 🛣️ Next steps
 
-1. **Notifications** — تنبيه العميل (email/WhatsApp) لما منافسة في قطاعه تطلع.
-2. **بحث semantic** — `pgvector` على Supabase + embeddings.
+1. **Notifications** — alert the client (email/WhatsApp) when a tender in their sector is published.
+2. **Semantic search** — `pgvector` on Supabase + embeddings.
 3. **Dashboard** — Next.js + Supabase client.
-4. **التحول للـ API الرسمي** — `apiportal.etimad.sa`.
+4. **Move to the official API** — `apiportal.etimad.sa`.
