@@ -38,16 +38,16 @@ BRIEF_TENDER_COUNT = 5   # how many tenders to include in each daily email
 _RIYADH = timezone(timedelta(hours=3))
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Colors
-_BG      = "#0f1117"
-_SURFACE = "#1a1d27"
-_BORDER  = "#2a2d3a"
-_TEXT    = "#e8eaf0"
-_MUTED   = "#8b90a0"
-_BRAND   = "#4f8ef7"
-_GREEN   = "#22c55e"
-_YELLOW  = "#f59e0b"
-_RED     = "#ef4444"
+# Colors — Saudi palette: flag green (#006C35) on white, gold accent
+_BG      = "#f3f6f3"   # light page background
+_SURFACE = "#ffffff"   # white card
+_BORDER  = "#dbe7e0"   # soft green-gray divider
+_TEXT    = "#13241b"   # near-black green for body text
+_MUTED   = "#5d6f64"   # muted green-gray
+_BRAND   = "#006c35"   # Saudi flag green — header, CTA, accents
+_GREEN   = "#0a8a45"   # success / positive
+_YELLOW  = "#9a6a00"   # gold-amber for deadlines (readable on white)
+_RED     = "#c0392b"   # errors / urgency
 
 
 # ----------------------------------------------------------------------
