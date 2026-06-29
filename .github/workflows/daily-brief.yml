@@ -13,6 +13,10 @@ on:
         description: "Dry run (build emails but don't send)"
         type: boolean
         default: false
+      force:
+        description: "Force resend even if already sent today (for testing)"
+        type: boolean
+        default: false
       only_user:
         description: "Restrict to one user ID (for testing)"
         type: string
@@ -31,14 +35,15 @@ jobs:
           # request.query_params, not the JSON body. They only come from a
           # manual dispatch; scrape-triggered runs are always live.
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          FORCE="${{ github.event.inputs.force || 'false' }}"
           ONLY_USER="${{ github.event.inputs.only_user }}"
 
-          URL="${{ secrets.ETIMAD_URL }}/cron/daily-brief?dry_run=${DRY_RUN}"
+          URL="${{ secrets.ETIMAD_URL }}/cron/daily-brief?dry_run=${DRY_RUN}&force=${FORCE}"
           if [ -n "$ONLY_USER" ]; then
             URL="${URL}&user=${ONLY_USER}"
           fi
 
-          echo "POST .../cron/daily-brief?dry_run=${DRY_RUN}${ONLY_USER:+&user=***}"
+          echo "POST .../cron/daily-brief?dry_run=${DRY_RUN}&force=${FORCE}${ONLY_USER:+&user=***}"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST "${URL}" \
