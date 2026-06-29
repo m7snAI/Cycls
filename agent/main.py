@@ -74,7 +74,7 @@ TOOLS = [
             "Search active Saudi government tenders from منصة اعتماد.\n\n"
             "- Pass the user's sector keyword and city from their profile.\n"
             "- Results are sorted by deadline (soonest first).\n"
-            "- Returns up to 10 matching tenders with: etimad_tender_id, tender_name, agency_name, last_offer_date, condition_booklet_price, place, detail_url.\n"
+            "- Returns up to 10 matching tenders with: etimad_tender_id, tender_name, agency_name, publish_date, last_offer_date, condition_booklet_price (the conditions-booklet fee, NOT the tender's value), place, detail_url.\n"
             "- If no results, a fallback search by city only is attempted automatically.\n"
             "- Call this once per turn only."
         ),
@@ -120,7 +120,7 @@ def make_tender_search():
             f"{supabase_url}/rest/v1/active_tenders"
             f"?tender_name=ilike.*{keyword}*"
             f"&place=ilike.*{place}*"
-            f"&select=etimad_tender_id,tender_name,agency_name,last_offer_date,condition_booklet_price,place,detail_url"
+            f"&select=etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
             f"&order=last_offer_date.asc"
             f"&limit=10"
         )
@@ -134,7 +134,7 @@ def make_tender_search():
             url_fallback = (
                 f"{supabase_url}/rest/v1/active_tenders"
                 f"?place=ilike.*{place}*"
-                f"&select=etimad_tender_id,tender_name,agency_name,last_offer_date,condition_booklet_price,place,detail_url"
+                f"&select=etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
                 f"&order=last_offer_date.asc"
                 f"&limit=10"
             )

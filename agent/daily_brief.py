@@ -162,7 +162,7 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
         "apikey": key,
         "Authorization": f"Bearer {key}",
     }
-    fields = "etimad_tender_id,tender_name,agency_name,last_offer_date,condition_booklet_price,place,detail_url"
+    fields = "etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
 
     # Primary: sector + city
     url = (
@@ -198,12 +198,13 @@ def _esc(s) -> str:
     return _html.escape(str(s or ""))
 
 def _tender_row(i: int, t: dict) -> str:
-    name     = _esc(t.get("tender_name", "—"))
-    agency   = _esc(t.get("agency_name", "—"))
-    deadline = _esc(t.get("last_offer_date", "—"))[:10]
-    price    = t.get("condition_booklet_price")
+    name      = _esc(t.get("tender_name", "—"))
+    agency    = _esc(t.get("agency_name", "—"))
+    published = _esc(t.get("publish_date", "—"))[:10]
+    deadline  = _esc(t.get("last_offer_date", "—"))[:10]
+    price     = t.get("condition_booklet_price")
     price_str = "مجاني" if not price or price == 0 else f"{price:,} ر.س"
-    url      = t.get("detail_url", "#")
+    url       = t.get("detail_url", "#")
 
     return f"""
     <tr style="border-bottom:1px solid {_BORDER};">
@@ -212,6 +213,7 @@ def _tender_row(i: int, t: dict) -> str:
         <a href="{_esc(url)}" style="color:{_TEXT};text-decoration:none;font-weight:600;">{name}</a>
         <div style="color:{_MUTED};font-size:13px;margin-top:4px;">{agency}</div>
       </td>
+      <td style="padding:14px 10px;color:{_MUTED};font-size:13px;white-space:nowrap;">{published}</td>
       <td style="padding:14px 10px;color:{_YELLOW};font-size:13px;white-space:nowrap;">{deadline}</td>
       <td style="padding:14px 10px;color:{_MUTED};font-size:13px;white-space:nowrap;">{price_str}</td>
     </tr>"""
@@ -231,6 +233,7 @@ def build_email(company: str, sectors: str, city: str,
             <tr style="border-bottom:2px solid {_BORDER};">
               <th style="padding:10px;color:{_MUTED};font-size:12px;font-weight:500;">#</th>
               <th style="padding:10px;color:{_MUTED};font-size:12px;font-weight:500;">المناقصة</th>
+              <th style="padding:10px;color:{_MUTED};font-size:12px;font-weight:500;">تاريخ النشر</th>
               <th style="padding:10px;color:{_MUTED};font-size:12px;font-weight:500;">الموعد النهائي</th>
               <th style="padding:10px;color:{_MUTED};font-size:12px;font-weight:500;">رسوم الكراسة</th>
             </tr>
