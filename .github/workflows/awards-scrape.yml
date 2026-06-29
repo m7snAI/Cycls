@@ -1,5 +1,5 @@
 # .github/workflows/awards-scrape.yml
-# Recurring awards capture (scrapers/parallel.py MODE=awards).
+# Recurring awards capture (scraper/parallel.py MODE=awards).
 # بيلتقط بيانات المتقدمين + الفائزين للمنافسات اللي حالتها بقت "تم اعتماد الترسية"
 # ولسه مش متسجّلة في tender_awards. الـ get_ids_needing_awards بيستهدف الجديد
 # أوتوماتيك، و awards_last_checked بيمنع إعادة فحص اللي طلعت فاضية (لسه مانشرتش).
@@ -38,10 +38,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: "requirements.txt"
+          cache-dependency-path: "scraper/requirements.txt"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r scraper/requirements.txt
 
       - name: Run awards scraper
         env:
@@ -54,7 +54,7 @@ jobs:
           AWARDS_RECHECK_DAYS: ${{ github.event.inputs.recheck_days || '30' }}
         run: |
           set -o pipefail
-          python scrapers/parallel.py 2>&1 | tee awards-scrape.log
+          python scraper/parallel.py 2>&1 | tee awards-scrape.log
 
       - name: Upload logs
         if: always()

@@ -43,7 +43,7 @@ SB_HEADERS = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
 DETAIL_BATCH = os.environ.get("DETAIL_BATCH", "5000")
 AWARD_CONCURRENCY = os.environ.get("AWARD_CONCURRENCY", "6")
 DETAIL_CONCURRENCY = os.environ.get("DETAIL_CONCURRENCY", "5")
-SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrapers", "parallel.py")
+SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parallel.py")
 
 PHASE_RETRIES = 6          # relaunch a crashed subprocess up to this many times
 RETRY_SLEEP_S = 60

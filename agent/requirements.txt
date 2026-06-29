@@ -1,0 +1,9 @@
+# Agent — local dev / deploy dependencies.
+# NOTE: the deployed container builds its own dependency set from
+# image.pip(...) in main.py. These are what you need to run `cycls run`
+# / `cycls deploy` locally and to execute daily_brief.py.
+cycls
+python-dotenv
+fastapi[standard]
+requests
+httpx>=0.27.0

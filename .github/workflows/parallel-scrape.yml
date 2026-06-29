@@ -66,10 +66,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: "requirements.txt"
+          cache-dependency-path: "scraper/requirements.txt"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt python-dotenv
+        run: pip install -r scraper/requirements.txt python-dotenv
 
       - name: Restore checkpoint
         # Unique key per run so cache always saves; restore-keys finds the latest prior run.
@@ -97,7 +97,7 @@ jobs:
           LIMIT_SHARDS: ${{ inputs.smoke_test && '2' || '0' }}
           LIMIT_PAGES_PER_SHARD: ${{ inputs.smoke_test && '100' || '0' }}
           LIMIT_DETAILS: ${{ inputs.smoke_test && '50' || '0' }}
-        run: python scrapers/parallel.py 2>&1 | tee parallel.log
+        run: python scraper/parallel.py 2>&1 | tee parallel.log
 
       - name: Upload logs and checkpoint
         if: always()

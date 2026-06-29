@@ -1,0 +1,51 @@
+name: Etimad Daily Brief
+
+on:
+  schedule:
+    # 7:00 AM Riyadh time = 4:00 AM UTC
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build emails but don't send)"
+        type: boolean
+        default: false
+      only_user:
+        description: "Restrict to one user ID (for testing)"
+        type: string
+        default: ""
+
+jobs:
+  send-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily brief
+        run: |
+          BODY='{"dry_run": ${{ github.event.inputs.dry_run || 'false' }}}'
+
+          # Append only_user if provided
+          ONLY_USER="${{ github.event.inputs.only_user }}"
+          if [ -n "$ONLY_USER" ]; then
+            BODY=$(echo $BODY | sed 's/}/, "only_user": "'"$ONLY_USER"'"}/')
+          fi
+
+          echo "Sending: $BODY"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${{ secrets.ETIMAD_URL }}/cron/daily-brief" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -d "$BODY")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY_RESP=$(echo "$RESPONSE" | head -n-1)
+
+          echo "Status: $HTTP_CODE"
+          echo "Response: $BODY_RESP"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Failed with status $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✅ Done"

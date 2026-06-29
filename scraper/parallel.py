@@ -467,8 +467,8 @@ def _load_activity_probe_data() -> tuple[list[int], dict[tuple[int, int, int], i
     """Load activities + sub-activity counts. activities.json: from /Tender/GetMainActivitiesAsync.
     sub_activity_totals.json: probe results of (main, sub, type) → totalCount.
     Returns (all_main_aids, sub_count_by_key)."""
-    # Anchor to repo_root/data regardless of CWD (this file lives in scrapers/).
-    data_dir = Path(__file__).resolve().parent.parent / "data"
+    # Anchor to scraper/data regardless of CWD (this file lives in scraper/).
+    data_dir = Path(__file__).resolve().parent / "data"
     with open(data_dir / "activities.json", encoding="utf-8") as f:
         activities = json.load(f)
     with open(data_dir / "sub_activity_totals.json", encoding="utf-8") as f:
