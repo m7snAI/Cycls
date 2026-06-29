@@ -5,6 +5,7 @@
 
 import json
 import os
+import statistics
 from datetime import datetime, timedelta, timezone
 
 import cycls
@@ -122,6 +123,35 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "award_comps",
+        "description": (
+            "Find bid-pricing comparables from PAST awarded tenders, to suggest a competitive price "
+            "range. Use this whenever the user asks how much to bid / what price to offer.\n\n"
+            "- Pass a work-type keyword from the tender name (e.g. 'تصميم', 'هوية بصرية', 'صيانة', "
+            "'تشغيل وصيانة'). Optionally pass `agency` to compare within the same entity.\n"
+            "- Returns historical figures in SAR from CLOSED comparable tenders: award_value "
+            "(winning amounts) min/median/max, offer_value (all submitted bids) spread, counts, and "
+            "a few examples.\n"
+            "- These are reference ranges from REAL past awards, not a guaranteed price. If "
+            "found=false, retry ONCE with a BROADER work-type keyword (e.g. 'تصميم' instead of "
+            "'هوية بصرية'); if still none, say there isn't enough data — do NOT invent numbers."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "Work-type phrase from the tender name, e.g. 'تصميم', 'هوية بصرية', 'صيانة'.",
+                },
+                "agency": {
+                    "type": "string",
+                    "description": "Optional agency name to compare within the same entity.",
+                },
+            },
+            "required": ["keyword"],
+        },
+    },
 ]
 
 # ----------------------------------------------------------------------
@@ -139,6 +169,15 @@ def _city_rank(tender: dict, region: str) -> int:
     if not p:
         return 1
     return 2
+
+
+def _num_stats(values):
+    """min / median / max / count over positive numeric values (drops null/0)."""
+    vals = sorted(v for v in values if isinstance(v, (int, float)) and v > 0)
+    if not vals:
+        return None
+    return {"min": round(vals[0]), "median": round(statistics.median(vals)),
+            "max": round(vals[-1]), "count": len(vals)}
 
 
 def make_tender_search():
@@ -272,6 +311,82 @@ def make_tender_lookup():
     return handler
 
 
+def make_award_comps():
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+    async def handler(args):
+        import requests
+
+        keyword = (args.get("keyword") or "").strip()
+        agency  = (args.get("agency") or "").strip()
+        if not keyword:
+            return {"found": False, "hint": "Empty keyword."}
+
+        headers = {"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"}
+
+        # 1) comparable tenders by work-type keyword (+ optional same agency)
+        url = (
+            f"{supabase_url}/rest/v1/tenders"
+            f"?tender_name=ilike.*{keyword}*"
+            + (f"&agency_name=ilike.*{agency}*" if agency else "")
+            + "&select=etimad_tender_id,tender_name,agency_name&limit=80"
+        )
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return {"error": f"Supabase returned {r.status_code}", "detail": r.text[:300]}
+        tenders = r.json()
+        if not tenders:
+            return {"found": False, "comparables_scanned": 0,
+                    "hint": "No comparable tenders for this keyword."}
+
+        id_list = ",".join(t["etimad_tender_id"] for t in tenders)
+        name_by_id = {t["etimad_tender_id"]: (t.get("tender_name"), t.get("agency_name")) for t in tenders}
+
+        # 2) winning amounts among those comparables
+        ra = requests.get(
+            f"{supabase_url}/rest/v1/tender_awards"
+            f"?etimad_tender_id=in.({id_list})&role=eq.awarded"
+            f"&select=etimad_tender_id,award_value&limit=300",
+            headers=headers, timeout=15)
+        awarded = ra.json() if ra.status_code == 200 else []
+
+        # 3) all submitted bids among those comparables (competition spread)
+        rs = requests.get(
+            f"{supabase_url}/rest/v1/tender_awards"
+            f"?etimad_tender_id=in.({id_list})&role=eq.submitted"
+            f"&select=offer_value&limit=500",
+            headers=headers, timeout=15)
+        submitted = rs.json() if rs.status_code == 200 else []
+
+        award_stats = _num_stats([a.get("award_value") for a in awarded])
+        offer_stats = _num_stats([s.get("offer_value") for s in submitted])
+
+        if not award_stats and not offer_stats:
+            return {"found": False, "comparables_scanned": len(tenders),
+                    "hint": "Comparable tenders found, but none have award/offer figures yet."}
+
+        examples = []
+        for a in awarded:
+            if a.get("award_value"):
+                nm, ag = name_by_id.get(a["etimad_tender_id"], (None, None))
+                examples.append({"tender_name": nm, "agency_name": ag,
+                                 "award_value": round(a["award_value"])})
+            if len(examples) >= 5:
+                break
+
+        return {
+            "found": True,
+            "comparables_scanned": len(tenders),
+            "award_value": award_stats,   # winning amounts (SAR)
+            "offer_value": offer_stats,   # all submitted bids — competition spread (SAR)
+            "examples": examples,
+            "note": "Historical figures (SAR) from CLOSED comparable tenders. A reference range, not a guaranteed price.",
+        }
+
+    return handler
+
+
 # ----------------------------------------------------------------------
 # Dates
 # ----------------------------------------------------------------------
@@ -293,6 +408,7 @@ _llm_base = (
     .tools(TOOLS)
     .on("tender_search", make_tender_search())
     .on("tender_lookup", make_tender_lookup())
+    .on("award_comps", make_award_comps())
     .allowed_tools(["Bash", "Editor", "DataBase"])
     .sandbox(network=True)
 )

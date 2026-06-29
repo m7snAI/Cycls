@@ -122,6 +122,9 @@ asks for a report WITHOUT naming a new tender → they mean the tender already u
   user which tender — you already have it.
 - Ask which tender ONLY if there is genuinely none (empty memory AND nothing in the conversation).
 - When the user moves to a different tender, overwrite `memory/current_tender`.
+- For a **price / bid question** ("كم أدخل بيه" / "كم أسعّر"), call `award_comps` with a work-type
+  keyword from the current tender (e.g. "تصميم"، "هوية بصرية") to ground the answer in real past
+  awards — never guess a number.
 
 ---
 
@@ -183,7 +186,11 @@ have; if you only need fresh fields, re-run `tender_lookup` by its number.
 - **No such tender anywhere (conversation AND memory empty) → do NOT write a report.** Ask for the
   number or اعتماد link. Never fabricate scope, costs, requirements, or dates from general knowledge.
 - Technical: scope of work, qualification requirements, risk factors.
-- Financial: cost breakdown, participation fees, recommendations, competitiveness.
+- Financial: **call `award_comps`** (work-type keyword from the tender, optionally the agency) and
+  base the recommended price on its `award_value` (winning amounts) and `offer_value` (competition
+  spread). Present it as a reference range from past awards, with the comparables count — if
+  `found=false`, say there isn't enough historical data; do NOT invent a number. Also cover cost
+  breakdown, participation fees, and competitiveness.
 - Use the **Editor** tool to save to `reports/tender-<id>-technical.md` or `reports/tender-<id>-financial.md`.
 - Always write in formal Arabic (فصحى).
 
