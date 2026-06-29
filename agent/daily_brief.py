@@ -164,19 +164,19 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
     }
     fields = "etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
 
-    # Primary: sector + city
+    # Forgiving: match by sector only, then rank by city (same-city → no listed
+    # location → other city). Tenders without a place are NOT dropped.
     url = (
         f"{url_base}/rest/v1/active_tenders"
         f"?tender_name=ilike.*{sectors}*"
-        f"&place=ilike.*{city}*"
         f"&select={fields}"
         f"&order=last_offer_date.asc"
-        f"&limit=10"
+        f"&limit=50"
     )
     r = requests.get(url, headers=headers, timeout=10)
     rows = r.json() if r.status_code == 200 else []
 
-    # Fallback: city only
+    # Last resort: sector matched nothing → soonest active tenders in the city.
     if not rows:
         url_fallback = (
             f"{url_base}/rest/v1/active_tenders"
@@ -187,6 +187,15 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
         )
         r2 = requests.get(url_fallback, headers=headers, timeout=10)
         rows = r2.json() if r2.status_code == 200 else []
+
+    def _rank(t):
+        p = (t.get("place") or "").strip()
+        if city and city in p:
+            return 0          # same city
+        if not p:
+            return 1          # no listed location — keep it
+        return 2              # other city
+    rows.sort(key=_rank)      # stable: keeps deadline order within each tier
 
     return rows[:3]  # top 3 only for the email
 

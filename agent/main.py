@@ -73,9 +73,11 @@ TOOLS = [
         "description": (
             "Search active Saudi government tenders from منصة اعتماد.\n\n"
             "- Pass the user's sector keyword and city from their profile.\n"
-            "- Results are sorted by deadline (soonest first).\n"
-            "- Returns up to 10 matching tenders with: etimad_tender_id, tender_name, agency_name, publish_date, last_offer_date, condition_booklet_price (the conditions-booklet fee, NOT the tender's value), place, detail_url.\n"
-            "- If no results, a fallback search by city only is attempted automatically.\n"
+            "- Matches by sector keyword, then ranks by city: same-city first, then tenders with no "
+            "listed location, then other cities. Tenders without a city are NOT dropped, so some "
+            "results may be outside the user's city — say so when relevant.\n"
+            "- Returns up to 10 tenders with: etimad_tender_id, tender_name, agency_name, publish_date, last_offer_date, condition_booklet_price (the conditions-booklet fee, NOT the tender's value), place, detail_url.\n"
+            "- If the sector matches nothing, falls back to the soonest active tenders in the city.\n"
             "- Call this once per turn only."
         ),
         "inputSchema": {
@@ -128,6 +130,17 @@ TOOLS = [
 _MAX_PAYLOAD_CHARS = 20_000
 
 
+def _city_rank(tender: dict, region: str) -> int:
+    """Rank a tender by city relevance — used to sort without EXCLUDING:
+    0 = same city, 1 = no listed location (keep it), 2 = a different city."""
+    p = (tender.get("place") or "").strip()
+    if region and region in p:
+        return 0
+    if not p:
+        return 1
+    return 2
+
+
 def make_tender_search():
     supabase_url = os.environ.get("SUPABASE_URL", "")
     supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -143,13 +156,17 @@ def make_tender_search():
             "Authorization": f"Bearer {supabase_key}",
         }
 
+        fields = "etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
+
+        # Forgiving search: match by sector keyword only, then RANK by city below.
+        # We never drop a tender just because its place is empty or a different
+        # region (place coverage is incomplete in the DB).
         url = (
             f"{supabase_url}/rest/v1/active_tenders"
             f"?tender_name=ilike.*{keyword}*"
-            f"&place=ilike.*{place}*"
-            f"&select=etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
+            f"&select={fields}"
             f"&order=last_offer_date.asc"
-            f"&limit=10"
+            f"&limit=50"
         )
         r = requests.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
@@ -157,11 +174,12 @@ def make_tender_search():
 
         rows = r.json()
 
+        # Last resort: the sector matched nothing → soonest active tenders in the city.
         if not rows:
             url_fallback = (
                 f"{supabase_url}/rest/v1/active_tenders"
                 f"?place=ilike.*{place}*"
-                f"&select=etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
+                f"&select={fields}"
                 f"&order=last_offer_date.asc"
                 f"&limit=10"
             )
@@ -170,6 +188,10 @@ def make_tender_search():
 
         if not rows:
             return {"tenders": [], "count": 0, "hint": "No active tenders found."}
+
+        # Stable sort keeps deadline order within each city tier.
+        rows.sort(key=lambda t: _city_rank(t, place))
+        rows = rows[:10]
 
         result = {"tenders": rows, "count": len(rows)}
         serialized = json.dumps(result, ensure_ascii=False, default=str)

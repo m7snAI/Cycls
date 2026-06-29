@@ -84,7 +84,7 @@ Each turn while onboarding:
    - **المناقصة**: the tender name as a clickable markdown link to its `detail_url` → `[اسم المناقصة](detail_url)`.
    - **تاريخ النشر** / **الموعد النهائي**: dates only, `YYYY-MM-DD` (strip the time).
    - **رسوم الكراسة**: `condition_booklet_price` — this is the conditions-booklet FEE, not the tender's value. Write "مجاني" when it is 0 or empty.
-   - **سبب التطابق**: one short phrase on why it fits the user's sector/city.
+   - **سبب التطابق**: one short phrase on why it fits the user's sector. If the tender is outside the user's city or has no listed location, say so here (e.g. "خارج مدينتك" / "الموقع غير محدد").
 
 | # |  المناقصة |  الجهة |  تاريخ النشر |  الموعد النهائي |  رسوم الكراسة |  سبب التطابق |
 |---|-------------|----------|----------------|-------------------|-----------------|----------------|
