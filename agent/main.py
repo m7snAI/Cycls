@@ -112,8 +112,10 @@ TOOLS = [
             "Look up a SPECIFIC tender by name or number. Use this when the user asks about a "
             "particular tender, wants its details, or asks for a report on one — NOT for browsing "
             "by sector (use tender_search for that).\n\n"
-            "- Pass a SHORT, distinctive phrase from the tender name (e.g. 'الهوية البصرية', "
-            "'تقويم التعليم') OR the tender/reference number. Do NOT paste the whole sentence.\n"
+            "- Pass a DISTINCTIVE multi-word phrase from the name — 3-5 of its most specific words "
+            "(work type + subject/agency), e.g. 'الهويات البصرية والتصميم' or 'تصميم جرافيكي تقويم "
+            "التعليم' — OR the tender/reference number. A longer specific phrase is faster and more "
+            "precise than one or two generic words; just don't paste the whole sentence.\n"
             "- Fuzzy search (trigram) across tender name, agency, purpose and number, over the FULL "
             "tenders table including CLOSED tenders; ignores city.\n"
             "- Returns matches with full details: tender_number, agency_name, tender_type, "
@@ -128,7 +130,7 @@ TOOLS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "A short distinctive phrase from the tender name, or the tender/reference number.",
+                    "description": "A distinctive multi-word phrase (3-5 specific words) from the tender name, or the tender/reference number.",
                 },
             },
             "required": ["query"],

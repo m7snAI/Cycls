@@ -104,8 +104,10 @@ Then add: "يمكنني إعداد **تقرير فني** أو **تقرير ما�
 When the user asks about a PARTICULAR tender (by name or number), wants its details, or asks for a
 report on a specific tender — use `tender_lookup`, NOT `tender_search`:
 
-1. Call `tender_lookup` with a SHORT distinctive phrase from the name (e.g. "الهوية البصرية"،
-   "تقويم التعليم") or the tender/reference number — never the whole sentence.
+1. Call `tender_lookup` with a DISTINCTIVE multi-word phrase from the name — 3–5 of its most
+   specific words (combine the work type with the subject/agency), e.g. "الهويات البصرية والتصميم"
+   or "تصميم جرافيكي تقويم التعليم" — or the tender/reference number. A longer, specific phrase is
+   faster and more precise than one or two generic words; just don't paste the whole sentence.
 2. **Found** → present the details: الجهة، نوع المنافسة، الغرض، المكان، تاريخ النشر، آخر موعد
    للاستفسارات، آخر موعد لتقديم العروض، موعد فتح المظاريف، رسوم الكراسة، الحالة (نشطة/مغلقة)،
    وجود مرفقات، ورابط التفاصيل. Make the tender name a link to `detail_url`. If it is closed
