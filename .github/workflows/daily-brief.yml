@@ -1,9 +1,12 @@
 name: Etimad Daily Brief
 
 on:
-  schedule:
-    # 7:00 AM Riyadh time = 4:00 AM UTC
-    - cron: "0 4 * * *"
+  # Run right AFTER the Etimad Scrape finishes, so the brief reflects fresh DB
+  # data instead of relying on a guessed time gap. (workflow_run only triggers
+  # from the workflow file on the default branch.)
+  workflow_run:
+    workflows: ["Etimad Scrape"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -18,33 +21,37 @@ on:
 jobs:
   send-brief:
     runs-on: ubuntu-latest
+    # Only send when the triggering scrape succeeded (or on a manual dispatch).
+    # A failed/cancelled scrape skips this job rather than briefing on stale data.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Trigger daily brief
         run: |
-          BODY='{"dry_run": ${{ github.event.inputs.dry_run || 'false' }}}'
-
-          # Append only_user if provided
+          # dry_run / user are passed as QUERY PARAMS — the agent route reads
+          # request.query_params, not the JSON body. They only come from a
+          # manual dispatch; scrape-triggered runs are always live.
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
           ONLY_USER="${{ github.event.inputs.only_user }}"
+
+          URL="${{ secrets.ETIMAD_URL }}/cron/daily-brief?dry_run=${DRY_RUN}"
           if [ -n "$ONLY_USER" ]; then
-            BODY=$(echo $BODY | sed 's/}/, "only_user": "'"$ONLY_USER"'"}/')
+            URL="${URL}&user=${ONLY_USER}"
           fi
 
-          echo "Sending: $BODY"
+          echo "POST .../cron/daily-brief?dry_run=${DRY_RUN}${ONLY_USER:+&user=***}"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "${{ secrets.ETIMAD_URL }}/cron/daily-brief" \
-            -H "Content-Type: application/json" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            -d "$BODY")
+            -X POST "${URL}" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY_RESP=$(echo "$RESPONSE" | head -n-1)
 
-          echo "Status: $HTTP_CODE"
-          echo "Response: $BODY_RESP"
+          echo "Status: ${HTTP_CODE}"
+          echo "Response: ${BODY_RESP}"
 
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Failed with status $HTTP_CODE"
+            echo "❌ Failed with status ${HTTP_CODE}"
             exit 1
           fi
 

@@ -45,7 +45,7 @@ etimad_tender/
    ├─ awards-scrape.yml      ← weekly on Monday (scraper/parallel.py MODE=awards)
    ├─ parallel-scrape.yml    ← manual: parallel backfill
    ├─ probe-pagination-cap.yml ← manual: probe
-   └─ daily-brief.yml        ← daily 7am Riyadh: POSTs /cron/daily-brief on the agent
+   └─ daily-brief.yml        ← runs after Etimad Scrape succeeds: POSTs /cron/daily-brief
 ```
 
 ## 🚀 Setup
@@ -130,9 +130,11 @@ uv run cycls deploy main.py      # deploy
 ```
 
 The agent reads the `active_tenders` view via the Supabase REST API (`tender_search` tool). The
-**daily brief** is triggered by `.github/workflows/daily-brief.yml` (07:00 Riyadh), which POSTs
-`${ETIMAD_URL}/cron/daily-brief` guarded by `X-Cron-Secret`. It needs repo secrets `ETIMAD_URL` and
-`CRON_SECRET` (in addition to the agent's runtime env vars). Beyond the shared `SUPABASE_*`, the agent
+**daily brief** is triggered by `.github/workflows/daily-brief.yml`, which runs **after the Etimad
+Scrape workflow completes successfully** (`workflow_run`) so the brief always reflects freshly-scraped
+data — rather than racing it on a fixed schedule. It POSTs `${ETIMAD_URL}/cron/daily-brief` guarded by
+`X-Cron-Secret`, and needs repo secrets `ETIMAD_URL` and `CRON_SECRET` (in addition to the agent's
+runtime env vars). Beyond the shared `SUPABASE_*`, the agent
 needs `ANTHROPIC_API_KEY`, `CYCLS_API_KEY`, `CRON_SECRET`, and `RESEND_API_KEY` — see `.env.example`.
 
 ## 🔧 Common issues

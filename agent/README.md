@@ -29,11 +29,13 @@ uv run cycls deploy main.py  # deploy
 > and `.env` into the image using paths relative to the working directory.
 
 ## Daily brief
-- Sent by `.github/workflows/daily-brief.yml` (07:00 Riyadh) which `POST`s
-  `${ETIMAD_URL}/cron/daily-brief` with the `X-Cron-Secret` header.
+- Sent by `.github/workflows/daily-brief.yml`, which runs **after the `Etimad Scrape`
+  workflow succeeds** (`workflow_run`) so the brief reflects freshly-scraped data.
+  It `POST`s `${ETIMAD_URL}/cron/daily-brief` with the `X-Cron-Secret` header.
 - Requires repo secrets **`ETIMAD_URL`** and **`CRON_SECRET`**.
 - Manual `workflow_dispatch` supports `dry_run` (build but don't send) and
-  `only_user` (restrict to one user ID) for testing.
+  `only_user` (restrict to one user ID) for testing — both passed as **query params**
+  (`?dry_run=true&user=<id>`), which is what the agent route reads.
 
 ## Storage
 User profile / email subscription state lives in Cycls' per-user DB

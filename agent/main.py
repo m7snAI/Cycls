@@ -226,4 +226,4 @@ async def _email_unsubscribe(token: str = ""):
     return HTMLResponse(daily_brief.page("تم إلغاء اشتراكك في التقرير اليومي بنجاح."))
 
 
-etimad.deploy()
+etimad.local()
