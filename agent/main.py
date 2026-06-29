@@ -92,7 +92,34 @@ TOOLS = [
             },
             "required": ["sector", "region"],
         },
-    }
+    },
+    {
+        "name": "tender_lookup",
+        "description": (
+            "Look up a SPECIFIC tender by name or number. Use this when the user asks about a "
+            "particular tender, wants its details, or asks for a report on one — NOT for browsing "
+            "by sector (use tender_search for that).\n\n"
+            "- Pass a SHORT, distinctive phrase from the tender name (e.g. 'الهوية البصرية', "
+            "'تقويم التعليم') OR the tender/reference number. Do NOT paste the whole sentence.\n"
+            "- Searches the FULL tenders table, including CLOSED tenders, and ignores city.\n"
+            "- Returns matches with full details: tender_number, agency_name, tender_type, "
+            "tender_purpose, place, publish_date, last_offer_date, last_enquiry_date, "
+            "offers_opening_date, condition_booklet_price (booklet fee, NOT the value), "
+            "tender_status, is_active, has_attachments, detail_url.\n"
+            "- If it returns found=false / no rows, the tender is NOT in the database: tell the user "
+            "and ask for the tender number or the اعتماد link. NEVER invent details."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A short distinctive phrase from the tender name, or the tender/reference number.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 # ----------------------------------------------------------------------
@@ -156,6 +183,73 @@ def make_tender_search():
     return handler
 
 
+# Look up a specific tender by name or number — full tenders table (incl. closed),
+# no city filter, rich detail fields. Used for "tell me about THIS tender" / reports.
+_LOOKUP_FIELDS = (
+    "etimad_tender_id,tender_name,tender_number,reference_number,agency_name,"
+    "tender_type,tender_purpose,place,branch_name,publish_date,last_offer_date,"
+    "last_enquiry_date,offers_opening_date,condition_booklet_price,"
+    "tender_status,is_active,has_attachments,detail_url"
+)
+
+
+def make_tender_lookup():
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+    async def handler(args):
+        import requests
+
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"tenders": [], "count": 0, "found": False, "hint": "Empty query."}
+
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+        }
+
+        # 1) by name (most recent first; includes closed tenders)
+        url = (
+            f"{supabase_url}/rest/v1/tenders"
+            f"?tender_name=ilike.*{query}*"
+            f"&select={_LOOKUP_FIELDS}"
+            f"&order=publish_date.desc.nullslast"
+            f"&limit=5"
+        )
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return {"error": f"Supabase returned {r.status_code}", "detail": r.text[:500]}
+        rows = r.json()
+
+        # 2) fallback: by tender / reference number
+        if not rows:
+            url_num = (
+                f"{supabase_url}/rest/v1/tenders"
+                f"?or=(tender_number.ilike.*{query}*,reference_number.ilike.*{query}*)"
+                f"&select={_LOOKUP_FIELDS}"
+                f"&order=publish_date.desc.nullslast"
+                f"&limit=5"
+            )
+            r2 = requests.get(url_num, headers=headers, timeout=10)
+            rows = r2.json() if r2.status_code == 200 else []
+
+        if not rows:
+            return {"tenders": [], "count": 0, "found": False,
+                    "hint": "No tender in the database matches this name or number."}
+
+        result = {"tenders": rows, "count": len(rows), "found": True}
+        serialized = json.dumps(result, ensure_ascii=False, default=str)
+        if len(serialized) > _MAX_PAYLOAD_CHARS:
+            while rows and len(json.dumps({"tenders": rows}, ensure_ascii=False, default=str)) > _MAX_PAYLOAD_CHARS:
+                rows = rows[:-1]
+            result = {"tenders": rows, "count": len(rows), "found": True, "truncated": True}
+
+        return result
+
+    return handler
+
+
 # ----------------------------------------------------------------------
 # Dates
 # ----------------------------------------------------------------------
@@ -176,6 +270,7 @@ _llm_base = (
     .max_tokens(32_768)
     .tools(TOOLS)
     .on("tender_search", make_tender_search())
+    .on("tender_lookup", make_tender_lookup())
     .allowed_tools(["Bash", "Editor", "DataBase"])
     .sandbox(network=True)
 )
