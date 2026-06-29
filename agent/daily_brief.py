@@ -6,7 +6,7 @@
 # For each subscribed user it:
 #   1. Reads memory/profile  (company, sectors, city)
 #   2. Calls tender_search directly against Supabase
-#   3. Builds an Arabic HTML email with top 3 tenders
+#   3. Builds an Arabic HTML email with the top BRIEF_TENDER_COUNT tenders
 #   4. Sends via Resend
 #
 # Subscription is stored in memory/email:
@@ -33,6 +33,7 @@ VOLUME       = "/workspace"
 EMAIL_KEY    = "memory/email"
 PROFILE_KEY  = "memory/profile"
 RESEND_URL   = "https://api.resend.com/emails"
+BRIEF_TENDER_COUNT = 5   # how many tenders to include in each daily email
 
 _RIYADH = timezone(timedelta(hours=3))
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -168,7 +169,7 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
     # Trigram + multi-field search, ranked by city → relevance → deadline
     # (search_tenders RPC; see scraper/db/search_functions.sql).
     def _rpc(q):
-        body = {"q": q, "only_active": True, "city": city or "", "agency": "", "max_rows": 10}
+        body = {"q": q, "only_active": True, "city": city or "", "agency": "", "max_rows": BRIEF_TENDER_COUNT}
         r = requests.post(f"{url_base}/rest/v1/rpc/search_tenders?select={fields}",
                           headers=headers, json=body, timeout=12)
         return r.json() if r.status_code == 200 else []
@@ -177,7 +178,7 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
     if not rows:                 # sector matched nothing → soonest active in the city
         rows = _rpc("")
 
-    return rows[:3]  # top 3 only for the email
+    return rows[:BRIEF_TENDER_COUNT]  # top N for the email
 
 
 # ----------------------------------------------------------------------

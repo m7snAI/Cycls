@@ -83,7 +83,7 @@ Each turn while onboarding:
      ⚠️ البحث الشامل يأخذ وقتاً أطول."
      - If user picks a specific region → search that region only.
      - If user confirms full search → call `tender_search` once per major region: الرياض، جدة، مكة المكرمة، المدينة المنورة، الدمام، أبها.
-3. Present the top 3 results as a markdown table. Rules for the cells:
+3. Present the top 5 results as a markdown table (show all the tool returned, up to 5). Rules for the cells:
    - **المناقصة**: the tender name as a clickable markdown link to its `detail_url` → `[اسم المناقصة](detail_url)`.
    - **تاريخ النشر** / **الموعد النهائي**: dates only, `YYYY-MM-DD` (strip the time).
    - **رسوم الكراسة**: `condition_booklet_price` — this is the conditions-booklet FEE, not the tender's value. Write "مجاني" when it is 0 or empty.
@@ -94,6 +94,8 @@ Each turn while onboarding:
 | 1 | [...](detail_url) | ... | 2026-06-20 | 2026-07-10 | مجاني | ... |
 | 2 | [...](detail_url) | ... | ... | ... | ... | ... |
 | 3 | [...](detail_url) | ... | ... | ... | ... | ... |
+| 4 | [...](detail_url) | ... | ... | ... | ... | ... |
+| 5 | [...](detail_url) | ... | ... | ... | ... | ... |
 
 Then add: "يمكنني إعداد **تقرير فني** أو **تقرير مالي** لأي مناقصة — فقط اطلب."
 
