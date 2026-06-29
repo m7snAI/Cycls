@@ -161,41 +161,21 @@ def search_tenders(sectors: str, city: str) -> list[dict]:
     headers = {
         "apikey": key,
         "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
     }
     fields = "etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
 
-    # Forgiving: match by sector only, then rank by city (same-city → no listed
-    # location → other city). Tenders without a place are NOT dropped.
-    url = (
-        f"{url_base}/rest/v1/active_tenders"
-        f"?tender_name=ilike.*{sectors}*"
-        f"&select={fields}"
-        f"&order=last_offer_date.asc"
-        f"&limit=50"
-    )
-    r = requests.get(url, headers=headers, timeout=10)
-    rows = r.json() if r.status_code == 200 else []
+    # Trigram + multi-field search, ranked by city → relevance → deadline
+    # (search_tenders RPC; see scraper/db/search_functions.sql).
+    def _rpc(q):
+        body = {"q": q, "only_active": True, "city": city or "", "agency": "", "max_rows": 10}
+        r = requests.post(f"{url_base}/rest/v1/rpc/search_tenders?select={fields}",
+                          headers=headers, json=body, timeout=12)
+        return r.json() if r.status_code == 200 else []
 
-    # Last resort: sector matched nothing → soonest active tenders in the city.
-    if not rows:
-        url_fallback = (
-            f"{url_base}/rest/v1/active_tenders"
-            f"?place=ilike.*{city}*"
-            f"&select={fields}"
-            f"&order=last_offer_date.asc"
-            f"&limit=10"
-        )
-        r2 = requests.get(url_fallback, headers=headers, timeout=10)
-        rows = r2.json() if r2.status_code == 200 else []
-
-    def _rank(t):
-        p = (t.get("place") or "").strip()
-        if city and city in p:
-            return 0          # same city
-        if not p:
-            return 1          # no listed location — keep it
-        return 2              # other city
-    rows.sort(key=_rank)      # stable: keeps deadline order within each tier
+    rows = _rpc(sectors)
+    if not rows:                 # sector matched nothing → soonest active in the city
+        rows = _rpc("")
 
     return rows[:3]  # top 3 only for the email
 

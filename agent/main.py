@@ -83,8 +83,9 @@ TOOLS = [
         "description": (
             "Search active Saudi government tenders from منصة اعتماد.\n\n"
             "- Pass the user's sector keyword and city from their profile.\n"
-            "- Matches by sector keyword, then ranks by city: same-city first, then tenders with no "
-            "listed location, then other cities. Tenders without a city are NOT dropped, so some "
+            "- Fuzzy match by sector keyword (trigram — handles Arabic word forms & word order, and "
+            "also matches the agency/purpose), then ranks by city: same-city first, then tenders with "
+            "no listed location, then other cities. Tenders without a city are NOT dropped, so some "
             "results may be outside the user's city — say so when relevant.\n"
             "- Returns up to 10 tenders with: etimad_tender_id, tender_name, agency_name, publish_date, last_offer_date, condition_booklet_price (the conditions-booklet fee, NOT the tender's value), place, detail_url.\n"
             "- If the sector matches nothing, falls back to the soonest active tenders in the city.\n"
@@ -113,7 +114,8 @@ TOOLS = [
             "by sector (use tender_search for that).\n\n"
             "- Pass a SHORT, distinctive phrase from the tender name (e.g. 'الهوية البصرية', "
             "'تقويم التعليم') OR the tender/reference number. Do NOT paste the whole sentence.\n"
-            "- Searches the FULL tenders table, including CLOSED tenders, and ignores city.\n"
+            "- Fuzzy search (trigram) across tender name, agency, purpose and number, over the FULL "
+            "tenders table including CLOSED tenders; ignores city.\n"
             "- Returns matches with full details: tender_number, agency_name, tender_type, "
             "tender_purpose, place, publish_date, last_offer_date, last_enquiry_date, "
             "offers_opening_date, condition_booklet_price (booklet fee, NOT the value), "
@@ -169,15 +171,24 @@ TOOLS = [
 _MAX_PAYLOAD_CHARS = 20_000
 
 
-def _city_rank(tender: dict, region: str) -> int:
-    """Rank a tender by city relevance — used to sort without EXCLUDING:
-    0 = same city, 1 = no listed location (keep it), 2 = a different city."""
-    p = (tender.get("place") or "").strip()
-    if region and region in p:
-        return 0
-    if not p:
-        return 1
-    return 2
+def _rpc_search(supabase_url, supabase_key, *, q, only_active=True,
+                city="", agency="", max_rows=10, select=None, timeout=12):
+    """Call the search_tenders RPC (trigram + multi-field, relevance + city ranked).
+    Returns (rows, response); rows is [] on any non-200. Requires the migration
+    in scraper/db/search_functions.sql to have been run."""
+    import requests
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+    }
+    url = f"{supabase_url}/rest/v1/rpc/search_tenders"
+    if select:
+        url += f"?select={select}"
+    body = {"q": q or "", "only_active": only_active,
+            "city": city or "", "agency": agency or "", "max_rows": max_rows}
+    r = requests.post(url, headers=headers, json=body, timeout=timeout)
+    return (r.json() if r.status_code == 200 else []), r
 
 
 def _num_stats(values):
@@ -194,52 +205,23 @@ def make_tender_search():
     supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
     async def handler(args):
-        import requests
-
-        keyword = args.get("sector", "")
-        place   = args.get("region", "")
-
-        headers = {
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        }
-
+        keyword = (args.get("sector") or "").strip()
+        place   = (args.get("region") or "").strip()
         fields = "etimad_tender_id,tender_name,agency_name,publish_date,last_offer_date,condition_booklet_price,place,detail_url"
 
-        # Forgiving search: match by sector keyword only, then RANK by city below.
-        # We never drop a tender just because its place is empty or a different
-        # region (place coverage is incomplete in the DB).
-        url = (
-            f"{supabase_url}/rest/v1/active_tenders"
-            f"?tender_name=ilike.*{keyword}*"
-            f"&select={fields}"
-            f"&order=last_offer_date.asc"
-            f"&limit=50"
-        )
-        r = requests.get(url, headers=headers, timeout=10)
+        # Trigram + multi-field search; the RPC ranks by city → relevance → deadline.
+        rows, r = _rpc_search(supabase_url, supabase_key, q=keyword,
+                              only_active=True, city=place, max_rows=10, select=fields)
         if r.status_code != 200:
             return {"error": f"Supabase returned {r.status_code}", "detail": r.text[:500]}
 
-        rows = r.json()
-
         # Last resort: the sector matched nothing → soonest active tenders in the city.
         if not rows:
-            url_fallback = (
-                f"{supabase_url}/rest/v1/active_tenders"
-                f"?place=ilike.*{place}*"
-                f"&select={fields}"
-                f"&order=last_offer_date.asc"
-                f"&limit=10"
-            )
-            r2 = requests.get(url_fallback, headers=headers, timeout=10)
-            rows = r2.json() if r2.status_code == 200 else []
+            rows, _ = _rpc_search(supabase_url, supabase_key, q="",
+                                  only_active=True, city=place, max_rows=10, select=fields)
 
         if not rows:
             return {"tenders": [], "count": 0, "hint": "No active tenders found."}
-
-        # Stable sort keeps deadline order within each city tier.
-        rows.sort(key=lambda t: _city_rank(t, place))
-        rows = rows[:10]
 
         result = {"tenders": rows, "count": len(rows)}
         serialized = json.dumps(result, ensure_ascii=False, default=str)
@@ -268,41 +250,15 @@ def make_tender_lookup():
     supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
     async def handler(args):
-        import requests
-
         query = (args.get("query") or "").strip()
         if not query:
             return {"tenders": [], "count": 0, "found": False, "hint": "Empty query."}
 
-        headers = {
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        }
-
-        # 1) by name (most recent first; includes closed tenders)
-        url = (
-            f"{supabase_url}/rest/v1/tenders"
-            f"?tender_name=ilike.*{query}*"
-            f"&select={_LOOKUP_FIELDS}"
-            f"&order=publish_date.desc.nullslast"
-            f"&limit=5"
-        )
-        r = requests.get(url, headers=headers, timeout=10)
+        # Fuzzy search across name / agency / purpose / number — all tenders (incl. closed).
+        rows, r = _rpc_search(supabase_url, supabase_key, q=query,
+                              only_active=False, max_rows=5, select=_LOOKUP_FIELDS)
         if r.status_code != 200:
             return {"error": f"Supabase returned {r.status_code}", "detail": r.text[:500]}
-        rows = r.json()
-
-        # 2) fallback: by tender / reference number
-        if not rows:
-            url_num = (
-                f"{supabase_url}/rest/v1/tenders"
-                f"?or=(tender_number.ilike.*{query}*,reference_number.ilike.*{query}*)"
-                f"&select={_LOOKUP_FIELDS}"
-                f"&order=publish_date.desc.nullslast"
-                f"&limit=5"
-            )
-            r2 = requests.get(url_num, headers=headers, timeout=10)
-            rows = r2.json() if r2.status_code == 200 else []
 
         if not rows:
             return {"tenders": [], "count": 0, "found": False,
@@ -334,17 +290,12 @@ def make_award_comps():
 
         headers = {"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"}
 
-        # 1) comparable tenders by work-type keyword (+ optional same agency)
-        url = (
-            f"{supabase_url}/rest/v1/tenders"
-            f"?tender_name=ilike.*{keyword}*"
-            + (f"&agency_name=ilike.*{agency}*" if agency else "")
-            + "&select=etimad_tender_id,tender_name,agency_name&limit=80"
-        )
-        r = requests.get(url, headers=headers, timeout=10)
+        # 1) comparable tenders by work-type keyword (fuzzy; + optional same agency)
+        tenders, r = _rpc_search(supabase_url, supabase_key, q=keyword,
+                                only_active=False, agency=agency, max_rows=80,
+                                select="etimad_tender_id,tender_name,agency_name")
         if r.status_code != 200:
             return {"error": f"Supabase returned {r.status_code}", "detail": r.text[:300]}
-        tenders = r.json()
         if not tenders:
             return {"found": False, "comparables_scanned": 0,
                     "hint": "No comparable tenders for this keyword."}

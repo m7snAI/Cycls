@@ -28,7 +28,8 @@ etimad_tender/
 │  ├─ parallel.py            ← parallel historical backfill + awards scrape (MODE=awards)
 │  ├─ probe.py               ← probe tool to discover the pagination cap (diagnostic)
 │  ├─ db/
-│  │  └─ schema.sql          ← Supabase tables (run once in the SQL Editor)
+│  │  ├─ schema.sql          ← Supabase tables (run once in the SQL Editor)
+│  │  └─ search_functions.sql ← trigram search RPC for the agent (run after schema.sql)
 │  ├─ data/
 │  │  ├─ activities.json     ← activity tree (used for sharding in parallel.py)
 │  │  ├─ activity_totals.json
@@ -55,9 +56,13 @@ etimad_tender/
 - From `Settings → API` copy the `Project URL` and the `service_role` key (not the anon key).
 - ⚠️ The service_role key bypasses RLS — keep it in secrets/`.env` only, and never commit it.
 
-### 2) Tables
+### 2) Tables + search functions
 - Dashboard → SQL Editor → New Query → paste the contents of `scraper/db/schema.sql` → Run.
-- Creates `tenders`, `scrape_runs`, `tender_awards`, and the `active_tenders` view.
+  Creates `tenders`, `scrape_runs`, `tender_awards`, and the `active_tenders` view.
+- Then run `scraper/db/search_functions.sql` (same SQL Editor). It adds trigram indexes
+  and the `search_tenders` RPC that powers the agent's fuzzy search/lookup tools.
+  ⚠️ The agent's `tender_search` / `tender_lookup` / `award_comps` tools call this RPC —
+  run it before using the agent, or those tools return `PGRST202` (function not found).
 
 ### 3) Environment
 Put these two in `.env` (locally) and in the GitHub repo secrets (for Actions):
