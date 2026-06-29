@@ -5,6 +5,7 @@
 
 import json
 import os
+import pathlib
 import statistics
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,10 @@ from dotenv import load_dotenv
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from prompt import build_prompt
+
+# Deploy from Windows: a WindowsPath can't be unpickled on the Linux build host,
+# so serialize paths as POSIX (matches TasiBot's known-good setup).
+pathlib.WindowsPath.__reduce__ = lambda self: (pathlib.PurePosixPath, (self.as_posix(),))
 
 load_dotenv(".env")
 
@@ -63,7 +68,11 @@ image = (
     .copy(".env")
 )
 
-web = cycls.Web().title("Etimad — tender discovery agent")
+web = (
+    cycls.Web()
+    .auth(cycls.Clerk())     # per-user identity → persisted chat history + per-user memory/*
+    .title("Etimad — tender discovery agent")
+)
 
 # ----------------------------------------------------------------------
 # Custom tool definition
@@ -409,7 +418,7 @@ _llm_base = (
     .on("tender_search", make_tender_search())
     .on("tender_lookup", make_tender_lookup())
     .on("award_comps", make_award_comps())
-    .allowed_tools(["Bash", "Editor", "DataBase"])
+    .allowed_tools(["Bash", "WebSearch", "Editor", "DataBase"])
     .sandbox(network=True)
 )
 
@@ -417,7 +426,7 @@ _llm_base = (
 # ----------------------------------------------------------------------
 # Agent
 # ----------------------------------------------------------------------
-@cycls.agent(image=image, web=web, name="etimad")
+@cycls.agent(image=image, web=web, name="etimad", memory="2Gi")
 async def etimad(context):
     if not context.messages:
         return
