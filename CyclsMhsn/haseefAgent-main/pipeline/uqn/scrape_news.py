@@ -121,11 +121,17 @@ def get_article_urls(page, category_slug: str | None = None, limit: int | None =
             print(f"  [WARN] Timeout on listing page {pg_num}: {e}")
             break
 
-        # Wait for article cards to be attached (state=attached avoids visibility hang)
+        # Wait for an actual article card to render (has numeric ID in href)
         try:
-            page.wait_for_selector("a[href*='/news/']", state="attached", timeout=10000)
+            page.wait_for_function(
+                """() => {
+                    const links = [...document.querySelectorAll('a[href*="/news/"]')];
+                    return links.some(a => /\\/\\d+$/.test(a.getAttribute('href')));
+                }""",
+                timeout=15000
+            )
         except Exception:
-            print(f"  [INFO] No article cards at page {pg_num}, stopping.")
+            print(f"  [WARN] Cards didn't render on page {pg_num}")
             break
 
         # Collect links with numeric IDs at the end
