@@ -39,6 +39,7 @@ CATEGORY_SLUGS = {
     "reports":               "تقارير",
     "royal-decrees":                      "أوامر ملكية",
     "custodian-of-the-two-holy-mosques":  "خادم الحرمين الشريفين",
+    "official-statements":                "بيانات رسمية",
 }
 
 # Noise lines to strip from full_text_ar
@@ -220,10 +221,11 @@ def parse_article(page, url: str) -> dict | None:
         category_slug = path_parts[1]
         category      = CATEGORY_SLUGS[category_slug]
     else:
-        for a in page.query_selector_all(".breadcrumb a, nav[aria-label='breadcrumb'] a"):
-            href = a.get_attribute("href") or ""
+        for a in page.query_selector_all("a.breadcrumbs-title"):
+            title_attr = a.get_attribute("title") or ""
+            text = a.inner_text().strip()
             for slug, label in CATEGORY_SLUGS.items():
-                if slug in href:
+                if label == title_attr or label == text:
                     category_slug = slug
                     category      = label
                     break
