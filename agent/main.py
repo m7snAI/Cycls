@@ -27,12 +27,7 @@ load_dotenv(".env")
 # ----------------------------------------------------------------------
 image = (
     cycls.Image()
-    # apt FIRST — matches TasiBot's known-good order
     .apt("libpango-1.0-0", "libpangoft2-1.0-0", "fontconfig")
-    # pip SECOND — FastAPI pins in the SAME call as other packages.
-    # The cycls SDK installs fastapi[standard] UNPINNED in its base layer;
-    # putting our pins here (after apt, before run) ensures they win.
-    # Exact versions from cycls 0.0.2.132's known-good trio (same as TasiBot).
     .pip(
         "requests",
         "httpx",
@@ -48,8 +43,6 @@ image = (
         "pillow",
         "beautifulsoup4",
         "pyyaml",
-        "fastapi[standard]==0.136.3",
-        "starlette==1.2.1",
     )
     .run(
         "mkdir -p /usr/share/fonts/truetype/ar "
@@ -66,12 +59,35 @@ image = (
     .copy("prompt.py")
     .copy("daily_brief.py")
     .copy(".env")
+    .copy("skills/")
+    .copy("logo.svg")
 )
 
 web = (
     cycls.Web()
     .auth(cycls.Clerk())     # per-user identity → persisted chat history + per-user memory/*
-    .title("Etimad — tender discovery agent")
+    .brand(
+        locale="ar",
+        name="اعتماد",
+        description="مساعدك الذكي في اكتشاف مناقصات منصة اعتماد الحكومية",
+        logo="logo.svg",
+    )
+    .brand(
+        locale="en",
+        name="Etimad",
+        description="Your AI assistant for Saudi government tenders on Etimad",
+        logo="logo.svg",
+    )
+    .colors(
+        primary="#009652",
+        secondary="#46b978",
+        primary_dark="#06675e",
+        secondary_dark="#1f754a",
+    )
+    .seo(
+        title="Etimad — مساعد المناقصات",
+        description="اكتشف المناقصات الحكومية المناسبة لك على منصة اعتماد",
+    )
 )
 
 # ----------------------------------------------------------------------
@@ -364,14 +380,14 @@ def _riyadh_date() -> str:
 # ----------------------------------------------------------------------
 _llm_base = (
     cycls.LLM()
-    .model("anthropic/claude-sonnet-4-6")
-    .api_key(os.environ.get("ANTHROPIC_API_KEY", ""))
-    .max_tokens(32_768)
+    .model("kimi/kimi-k3")
+    .base_url("https://api.moonshot.ai/v1")
+    .api_key(os.environ.get("KIMI_API_KEY", ""))
     .tools(TOOLS)
     .on("tender_search", make_tender_search())
     .on("tender_lookup", make_tender_lookup())
     .on("award_comps", make_award_comps())
-    .allowed_tools(["Bash", "WebSearch", "Editor", "DataBase"])
+    .allowed_tools(["Bash", "Editor", "DataBase"])
     .sandbox(network=True)
 )
 
@@ -379,12 +395,24 @@ _llm_base = (
 # ----------------------------------------------------------------------
 # Agent
 # ----------------------------------------------------------------------
-@cycls.agent(image=image, web=web, name="etimad", memory="2Gi")
+REPORT_KEYWORDS = ["عرض فني", "عرض مالي", "تقرير", "docx", "اعداد العرض", "ابدأ", "العرض"]
+
+
+def _is_report_turn(messages) -> bool:
+    last = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+    if not last:
+        return False
+    content = (last.get("content") or "").lower()
+    return any(kw in content for kw in REPORT_KEYWORDS)
+
+
+@cycls.agent(image=image, web=web, name="etimad-tender", memory="2Gi", volumes={"/workspace": cycls.Volume("etimad")})
 async def etimad(context):
     if not context.messages:
         return
     system = build_prompt(gregorian_date=_riyadh_date())
-    async for ev in _llm_base.system(system).run(context=context):
+    max_tok = 16_000 if _is_report_turn(context.messages) else 4_096
+    async for ev in _llm_base.system(system).max_tokens(max_tok).run(context=context):
         yield cycls.to_ui(ev)
 
 
@@ -421,4 +449,4 @@ async def _email_unsubscribe(token: str = ""):
     return HTMLResponse(daily_brief.page("تم إلغاء اشتراكك في التقرير اليومي بنجاح."))
 
 
-etimad.local()
+etimad.deploy()

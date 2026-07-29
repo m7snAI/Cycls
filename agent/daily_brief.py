@@ -23,7 +23,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import requests
-from cycls.app.db import DB, _store, workspace
+from cycls._app.db import DB, _store, workspace
 
 # ----------------------------------------------------------------------
 # Constants
@@ -101,10 +101,10 @@ def _email_from() -> str:
     explicit = os.environ.get("EMAIL_FROM")
     if explicit:
         return explicit
-    return "Etimad <brief@etimad.cycls.ai>" if _on_gcp() else "Etimad <onboarding@resend.dev>"
+    return "Etimad <brief@etimad-tender.cycls.ai>" if _on_gcp() else "Etimad <onboarding@resend.dev>"
 
 def _public_url() -> str:
-    return os.environ.get("PUBLIC_URL", "https://etimad.cycls.ai").rstrip("/")
+    return os.environ.get("PUBLIC_URL", "https://etimad-tender.cycls.ai").rstrip("/")
 
 def _user_db(subject: str) -> DB:
     return DB(workspace(subject, VOLUME, base=storage_base(), slot=".database"))
@@ -209,7 +209,7 @@ def _tender_row(i: int, t: dict) -> str:
     </tr>"""
 
 def build_email(company: str, sectors: str, city: str,
-                tenders: list[dict], user_id: str, date_str: str) -> tuple[str, str]:
+                tenders: list[dict], user_id: str, date_str: str, name: str = "") -> tuple[str, str]:
     """Build (html, subject) for one subscriber."""
 
     unsub_url = f"{_public_url()}/email/unsubscribe?token={make_token(user_id, 'unsub')}"
@@ -269,7 +269,7 @@ def build_email(company: str, sectors: str, city: str,
         <tr>
           <td style="padding:28px 32px 0;">
             <p style="color:{_TEXT};font-size:16px;margin:0;">
-              مرحباً بك في <strong>{_esc(company)}</strong> 👋
+              {"مرحباً <strong>" + _esc(name) + "</strong> من <strong>" + _esc(company) + "</strong> 👋" if name else "مرحباً بك في <strong>" + _esc(company) + "</strong> 👋"}
             </p>
           </td>
         </tr>
@@ -411,6 +411,7 @@ async def run_daily_brief(
 
         # Load profile
         profile = await db.get(PROFILE_KEY) or {}
+        name    = profile.get("name", "")
         company = profile.get("company", "شركتك")
         sectors = profile.get("sectors", "")
         city    = profile.get("city", "")
@@ -424,7 +425,7 @@ async def run_daily_brief(
 
         # Build email
         try:
-            html, subject = build_email(company, sectors, city, tenders, user_id, date_str)
+            html, subject = build_email(company, sectors, city, tenders, user_id, date_str, name=name)
         except Exception as e:
             result["failed"] += 1
             errors.append({"user": user_id, "error": f"render: {e}"})
