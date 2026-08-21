@@ -1,0 +1,12 @@
+[project]
+name = "cycls-doc-extracter"
+version = "0.1.0"
+description = "Cycls remote function for multi-format document extraction (PDF via pdf-inspector, Office/OpenDocument/RTF/EPUB/CSV via anydoc)."
+requires-python = ">=3.10"
+dependencies = [
+    "cycls",
+    "firecrawl-anydoc",
+]
+
+[tool.uv.sources]
+cycls = { path = "../../cycls", editable = true }
