@@ -1,0 +1,11 @@
+[project]
+name = "pdf-extractor"
+version = "0.1.0"
+description = "Cycls remote function wrapping pdf-inspector for Arabic PDF text extraction."
+requires-python = ">=3.10"
+dependencies = [
+    "cycls",
+]
+
+[tool.uv.sources]
+cycls = { path = "../cycls", editable = true }
